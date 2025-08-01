@@ -4187,6 +4187,7 @@ Oneplus A6010;5.5
 Oneplus A6013;5.5
 Oneplus One;4.69
 Oneplus X;4.69
+Oneplus PJE110;3.2
 Onkyo Granbeat;5.22
 Oppo 3000;4.54
 Oppo 3005;4.54
