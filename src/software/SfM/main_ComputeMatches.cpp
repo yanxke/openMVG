@@ -319,8 +319,13 @@ int main( int argc, char** argv )
 
       if (cmd.used('P')) // Preemptive filter
       {
+        OPENMVG_LOG_INFO << "Applying preemptive match filtering...";
         // Keep putative matches only if there is more than X matches
         PairWiseMatches map_filtered_matches;
+        system::LoggerProgress filter_progress(
+          static_cast<std::uint32_t>(map_PutativeMatches.size()),
+          "- Preemptive match filtering -",
+          10);
         for (const auto & pairwisematches_it : map_PutativeMatches)
         {
           const size_t putative_match_count = pairwisematches_it.second.size();
@@ -331,14 +336,17 @@ int main( int argc, char** argv )
             // the pair will be kept
             map_filtered_matches.insert(pairwisematches_it);
           }
+          ++filter_progress;
         }
         map_PutativeMatches.clear();
         std::swap(map_filtered_matches, map_PutativeMatches);
+        OPENMVG_LOG_INFO << "Preemptive match filtering done.";
       }
 
       //---------------------------------------
       //-- Export putative matches & pairs
       //---------------------------------------
+      OPENMVG_LOG_INFO << "Saving putative matches...";
       if ( !Save( map_PutativeMatches, std::string( sOutputMatchesFilename ) ) )
       {
         OPENMVG_LOG_ERROR
@@ -346,9 +354,11 @@ int main( int argc, char** argv )
           << sOutputMatchesFilename;
         return EXIT_FAILURE;
       }
+      OPENMVG_LOG_INFO << "Putative matches saved.";
       // Save pairs
       const std::string sOutputPairFilename =
         stlplus::create_filespec( sMatchesDirectory, "preemptive_pairs", "txt" );
+      OPENMVG_LOG_INFO << "Saving pairs...";
       if (!savePairs(
         sOutputPairFilename,
         getPairs(map_PutativeMatches)))
@@ -358,6 +368,7 @@ int main( int argc, char** argv )
           << sOutputPairFilename;
         return EXIT_FAILURE;
       }
+      OPENMVG_LOG_INFO << "Pairs saved.";
     }
     OPENMVG_LOG_INFO << "Task (Regions Matching) done in (s): " << timer.elapsed();
   }

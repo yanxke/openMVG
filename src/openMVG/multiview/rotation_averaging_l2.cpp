@@ -149,8 +149,12 @@ bool L2RotationAveraging
 
   constexpr int kDenseFallbackSize = 2048;
   Eigen::MatrixXd eigenvectors;
+  OPENMVG_LOG_INFO << "Rotation averaging (L2) eigen-solver threshold: "
+                   << kDenseFallbackSize
+                   << " (matrix size: " << AtAsparse.rows() << ")";
   if (AtAsparse.rows() <= kDenseFallbackSize)
   {
+    OPENMVG_LOG_INFO << "Rotation averaging (L2) using dense eigen-solver.";
     // Solve Ax=0 => eigen vectors (dense, faster for small problems)
     const Mat AtA = Mat(AtAsparse); // convert to dense
     Eigen::SelfAdjointEigenSolver<Mat> es(AtA, Eigen::ComputeEigenvectors);
@@ -172,6 +176,7 @@ bool L2RotationAveraging
   ++progress_bar;
   if (eigenvectors.size() == 0)
   {
+    OPENMVG_LOG_INFO << "Rotation averaging (L2) using sparse eigen-solver.";
     // Solve Ax=0 => eigen vectors (sparse, scalable for large problems)
     using Spectra::SortRule;
     using Spectra::SparseSymMatProd;

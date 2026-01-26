@@ -549,6 +549,11 @@ void GlobalSfMReconstructionEngine_RelativeMotions::Compute_Relative_Rotations
   }();
 
   // Export the rotation component from the computed relative poses
+  OPENMVG_LOG_INFO << "Extracting relative rotations...";
+  system::LoggerProgress extract_progress(
+    static_cast<std::uint32_t>(relative_poses.size()),
+    "- Relative rotation extraction -",
+    1);
   for (const auto & relative_pose : relative_poses)
   {
     // Add the relative rotation to the relative 'rotation' pose graph
@@ -556,11 +561,15 @@ void GlobalSfMReconstructionEngine_RelativeMotions::Compute_Relative_Rotations
       relative_pose.first.first, relative_pose.first.second,
       relative_pose.second.rotation(),
       1.f);
+    ++extract_progress;
   }
+  OPENMVG_LOG_INFO << "Relative rotations extracted.";
 
   // Log input graph to the HTML report
   if (!sLogging_file_.empty() && !sOut_directory_.empty())
   {
+    OPENMVG_LOG_INFO << "Exporting global relative rotation graphs...";
+    system::Timer graph_timer;
     // Log a relative view graph
     {
       std::set<IndexT> set_ViewIds;
@@ -598,6 +607,7 @@ void GlobalSfMReconstructionEngine_RelativeMotions::Compute_Relative_Rotations
 
       html_doc_stream_->pushInfo(os.str());
     }
+    OPENMVG_LOG_INFO << "Graph export done in (s): " << graph_timer.elapsed();
   }
 }
 
