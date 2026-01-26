@@ -159,6 +159,13 @@ int main( int argc, char** argv )
     return EXIT_FAILURE;
   }
 
+  if (!bForce && stlplus::file_exists(sFilteredMatchesFilename))
+  {
+    OPENMVG_LOG_INFO << "Filtered matches already exist, skipping: "
+                     << sFilteredMatchesFilename;
+    return EXIT_SUCCESS;
+  }
+
   const std::string sMatchesDirectory = stlplus::folder_part( sPutativeMatchesFilename );
 
   EGeometricModel eGeometricModelToCompute = FUNDAMENTAL_MATRIX;
