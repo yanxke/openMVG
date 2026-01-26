@@ -239,7 +239,7 @@ int main( int argc, char** argv )
   }
 
   // Show the progress on the command line:
-  system::LoggerProgress progress;
+  system::LoggerProgress progress(1, {}, 1);
 
   if ( !regions_provider->load( sfm_data, sMatchesDirectory, regions_type, &progress ) )
   {
