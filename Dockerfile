@@ -35,6 +35,8 @@ RUN mkdir /opt/openMVG_Build; \
     -DCMAKE_INSTALL_PREFIX="/opt/openMVG_Build/install" \
     -DOpenMVG_BUILD_TESTS=OFF \
     -DOpenMVG_BUILD_EXAMPLES=OFF \
+    -DOpenMVG_BUILD_GUI_SOFTWARES=OFF \
+    -DOpenMVG_BUILD_DOCS=OFF \
     -DCOINUTILS_INCLUDE_DIR_HINTS=/usr/include \
     -DLEMON_INCLUDE_DIR_HINTS=/usr/include/lemon \
     -DCLP_INCLUDE_DIR_HINTS=/usr/include \

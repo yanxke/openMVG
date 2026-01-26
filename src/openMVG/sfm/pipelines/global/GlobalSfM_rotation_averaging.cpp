@@ -14,6 +14,7 @@
 #include "openMVG/sfm/pipelines/global/sfm_global_reindex.hpp"
 #include "openMVG/stl/stlMap.hpp"
 #include "openMVG/system/logger.hpp"
+#include "openMVG/system/loggerprogress.hpp"
 
 #include "third_party/histogram/histogram.hpp"
 
@@ -174,6 +175,10 @@ void GlobalSfM_Rotation_AveragingSolver::TripletRotationRejection(
   std::vector<float> vec_errToIdentityPerTriplet;
   vec_errToIdentityPerTriplet.reserve(vec_triplets.size());
   // Compute the composition error for each length 3 cycles
+  openMVG::system::LoggerProgress progress_bar(
+    static_cast<std::uint32_t>(vec_triplets.size()),
+    "- Rotation triplet filtering -",
+    1);
   for (size_t i = 0; i < vec_triplets.size(); ++i)
   {
     const graph::Triplet & triplet = vec_triplets[i];
@@ -215,6 +220,7 @@ void GlobalSfM_Rotation_AveragingSolver::TripletRotationRejection(
       else
         map_relatives_validated[ik] = map_relatives.at(ik);
     }
+    ++progress_bar;
   }
   map_relatives = std::move(map_relatives_validated);
 

@@ -9,6 +9,7 @@
 #include "openMVG/multiview/rotation_averaging_l1.hpp"
 #include "openMVG/numeric/l1_solver_admm.hpp"
 #include "openMVG/system/logger.hpp"
+#include "openMVG/system/loggerprogress.hpp"
 
 #ifdef HAVE_BOOST
 #include <boost/accumulators/accumulators.hpp>
@@ -404,6 +405,7 @@ bool SolveL1RA
   const unsigned int nMainViewID
 )
 {
+  openMVG::system::LoggerProgress progress_bar(32, "Rotation averaging (L1RA)", 5);
   const unsigned nObss = (unsigned)RelRs.size();
   const unsigned nVars = (unsigned)Rs.size()-1; // one view is kept constant
   const unsigned m = nObss*3;
@@ -430,7 +432,12 @@ bool SolveL1RA
       break;
     // apply correction to global rotations
     CorrectMatrix(x, nMainViewID, Rs);
+    ++progress_bar;
   } while (++iter < 32 && e > 1e-5 && (ep-e)/e > 1e-2);
+  if (progress_bar.count() < progress_bar.expected_count())
+  {
+    progress_bar += (progress_bar.expected_count() - progress_bar.count());
+  }
 
   OPENMVG_LOG_INFO << "L1RA Converged in " << iter << " iterations.";
 
@@ -447,6 +454,7 @@ bool SolveIRLS
   const double sigma
 )
 {
+  openMVG::system::LoggerProgress progress_bar(32, "Rotation averaging (IRLS)", 5);
   const unsigned nObss = (unsigned)RelRs.size();
   const unsigned nVars = (unsigned)Rs.size()-1; // one view is kept constant
   const unsigned m = nObss*3;
@@ -505,7 +513,12 @@ bool SolveIRLS
 
     ep = e; e = (xp-x).norm();
 
+    ++progress_bar;
   } while (++iter < 32 && e > 1e-5 && (ep-e)/e > 1e-2);
+  if (progress_bar.count() < progress_bar.expected_count())
+  {
+    progress_bar += (progress_bar.expected_count() - progress_bar.count());
+  }
 
   OPENMVG_LOG_INFO << "IRLS Converged in " << iter << " iterations.";
 

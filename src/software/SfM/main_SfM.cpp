@@ -31,6 +31,8 @@
 #include "third_party/cmdLine/cmdLine.h"
 #include "third_party/stlplus3/filesystemSimplified/file_system.hpp"
 
+#include <glog/logging.h>
+
 #include <cstdlib>
 #include <memory>
 #include <string>
@@ -154,6 +156,7 @@ bool computeIndexFromImageNames(
 
 int main(int argc, char **argv)
 {
+  google::InitGoogleLogging(argv[0]);
   OPENMVG_LOG_INFO
       << "\n-----------------------------------------------------------"
       << "\n Structure from Motion:"

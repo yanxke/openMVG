@@ -20,6 +20,7 @@
 #endif
 
 #include "openMVG/system/logger.hpp"
+#include "openMVG/system/loggerprogress.hpp"
 
 //--
 //-- Implementation related to rotation averaging.
@@ -98,6 +99,7 @@ bool L2RotationAveraging
   std::vector<Mat3> & global_rotations
 )
 {
+  openMVG::system::LoggerProgress progress_bar(3, "Rotation averaging (L2)", 1);
   const size_t nRotationEstimation = vec_relativeRot.size();
   //--
   // Setup the Action Matrix
@@ -141,6 +143,7 @@ bool L2RotationAveraging
     const sMat AtAsparse = A.transpose() * A;
     AtA = Mat(AtAsparse); // convert to dense
   }
+  ++progress_bar;
 
   // Solve Ax=0 => eigen vectors
   Eigen::SelfAdjointEigenSolver<Mat> es(AtA, Eigen::ComputeEigenvectors);
@@ -149,6 +152,7 @@ bool L2RotationAveraging
   {
     return false;
   }
+  ++progress_bar;
   // else
   {
     // Sort abs(eigenvalues)
@@ -187,6 +191,7 @@ bool L2RotationAveraging
       global_rotations[i] *= R0T;
     }
   }
+  ++progress_bar;
   return true;
 }
 
@@ -276,8 +281,10 @@ bool L2RotationAveraging_Refine
       vec_Rot_AngleAxis[j].data());
   }
   ceres::Solver::Options solverOptions;
+  solverOptions.max_num_iterations = 50;
   solverOptions.minimizer_progress_to_stdout = false;
   solverOptions.logging_type = ceres::SILENT;
+  solverOptions.update_state_every_iteration = true;
   // Since the problem is sparse, use a sparse solver iff available
   if (ceres::IsSparseLinearAlgebraLibraryTypeAvailable(ceres::SUITE_SPARSE))
   {
@@ -300,9 +307,31 @@ bool L2RotationAveraging_Refine
 #endif
 #endif // OPENMVG_USE_OPENMP
 
+  openMVG::system::LoggerProgress progress_bar(
+    solverOptions.max_num_iterations,
+    "Rotation averaging (L2 refine)");
+  struct CeresProgressCallback final : public ceres::IterationCallback
+  {
+    explicit CeresProgressCallback(openMVG::system::LoggerProgress * progress)
+      : progress_(progress)
+    {}
+    ceres::CallbackReturnType operator()(const ceres::IterationSummary &) override
+    {
+      ++(*progress_);
+      return ceres::SOLVER_CONTINUE;
+    }
+    openMVG::system::LoggerProgress * progress_;
+  };
+  CeresProgressCallback progress_callback(&progress_bar);
+  solverOptions.callbacks.push_back(&progress_callback);
+
   ceres::Solver::Summary summary;
   ceres::Solve(solverOptions, &problem, &summary);
   // std::cout << summary.FullReport() << std::endl;
+  if (progress_bar.count() < progress_bar.expected_count())
+  {
+    progress_bar += (progress_bar.expected_count() - progress_bar.count());
+  }
 
   if (summary.IsSolutionUsable())
   {

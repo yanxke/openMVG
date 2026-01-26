@@ -250,7 +250,7 @@ int main(int argc, char **argv)
     system::Timer timer;
     Image<unsigned char> imageGray;
 
-    system::LoggerProgress my_progress_bar(sfm_data.GetViews().size(), "- EXTRACT FEATURES -" );
+    system::LoggerProgress my_progress_bar(sfm_data.GetViews().size(), "- EXTRACT FEATURES -", 1);
 
     // Use a boolean to track if we must stop feature extraction
     std::atomic<bool> preemptive_exit(false);
