@@ -421,6 +421,9 @@ bool GlobalSfMReconstructionEngine_RelativeMotions::Adjust()
 
   Bundle_Adjustment_Ceres bundle_adjustment_obj;
   // - refine only Structure and translations
+  OPENMVG_LOG_INFO << "Bundle adjustment: refine translations + structure...";
+  bundle_adjustment_obj.ceres_options().progress_modulo_ = 5;
+  bundle_adjustment_obj.ceres_options().progress_label_ = "T + X";
   bool b_BA_Status = bundle_adjustment_obj.Adjust
     (
       sfm_data_,
@@ -441,6 +444,9 @@ bool GlobalSfMReconstructionEngine_RelativeMotions::Adjust()
     }
 
     // - refine only Structure and Rotations & translations
+    OPENMVG_LOG_INFO << "Bundle adjustment: refine rotations + translations + structure...";
+    bundle_adjustment_obj.ceres_options().progress_modulo_ = 5;
+    bundle_adjustment_obj.ceres_options().progress_label_ = "R + T + X";
     b_BA_Status = bundle_adjustment_obj.Adjust
       (
         sfm_data_,
@@ -461,6 +467,9 @@ bool GlobalSfMReconstructionEngine_RelativeMotions::Adjust()
 
   if (b_BA_Status && ReconstructionEngine::intrinsic_refinement_options_ != Intrinsic_Parameter_Type::NONE) {
     // - refine all: Structure, motion:{rotations, translations} and optics:{intrinsics}
+    OPENMVG_LOG_INFO << "Bundle adjustment: refine intrinsics + motion + structure...";
+    bundle_adjustment_obj.ceres_options().progress_modulo_ = 2;
+    bundle_adjustment_obj.ceres_options().progress_label_ = "K + R + T + X";
     b_BA_Status = bundle_adjustment_obj.Adjust
       (
         sfm_data_,
@@ -520,6 +529,9 @@ bool GlobalSfMReconstructionEngine_RelativeMotions::Adjust()
     Control_Point_Parameter(),
     this->b_use_motion_prior_);
 
+  OPENMVG_LOG_INFO << "Bundle adjustment: final refine after outlier removal...";
+  bundle_adjustment_obj.ceres_options().progress_modulo_ = 2;
+  bundle_adjustment_obj.ceres_options().progress_label_ = "final";
   b_BA_Status = bundle_adjustment_obj.Adjust(sfm_data_, ba_refine_options);
   if (b_BA_Status && !sLogging_file_.empty())
   {
@@ -553,7 +565,7 @@ void GlobalSfMReconstructionEngine_RelativeMotions::Compute_Relative_Rotations
   system::LoggerProgress extract_progress(
     static_cast<std::uint32_t>(relative_poses.size()),
     "- Relative rotation extraction -",
-    1);
+    25);
   for (const auto & relative_pose : relative_poses)
   {
     // Add the relative rotation to the relative 'rotation' pose graph

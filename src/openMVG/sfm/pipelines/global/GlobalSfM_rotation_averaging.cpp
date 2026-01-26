@@ -178,7 +178,7 @@ void GlobalSfM_Rotation_AveragingSolver::TripletRotationRejection(
   openMVG::system::LoggerProgress progress_bar(
     static_cast<std::uint32_t>(vec_triplets.size()),
     "- Rotation triplet filtering -",
-    1);
+    25);
   for (size_t i = 0; i < vec_triplets.size(); ++i)
   {
     const graph::Triplet & triplet = vec_triplets[i];

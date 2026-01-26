@@ -187,6 +187,7 @@ bool Relative_Pose_Engine::Relative_Pose_Engine::Process(
         }
         // - refine only Structure and Rotations & translations (keep intrinsic constant)
         Bundle_Adjustment_Ceres::BA_Ceres_options options(false, false);
+        options.progress_modulo_ = 0; // disable BA progress in relative pose computation.  Otherwise it floods the log because there are many iterations.
         options.linear_solver_type_ = ceres::DENSE_SCHUR;
         Bundle_Adjustment_Ceres bundle_adjustment_obj(options);
         const Optimize_Options ba_refine_options

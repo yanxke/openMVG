@@ -24,7 +24,10 @@
 #include "openMVG/sfm/sfm_data_transform.hpp"
 #include "openMVG/sfm/sfm_data.hpp"
 #include "openMVG/system/logger.hpp"
+#include "openMVG/system/loggerprogress.hpp"
 #include "openMVG/types.hpp"
+
+#include <memory>
 
 #include <ceres/rotation.h>
 #include <ceres/types.h>
@@ -118,7 +121,9 @@ Bundle_Adjustment_Ceres::BA_Ceres_options::BA_Ceres_options
   gradient_tolerance_(1e-10),
   bUse_loss_function_(true),
   max_num_iterations_(50),
-  max_linear_solver_iterations_(500)
+  max_linear_solver_iterations_(500),
+  progress_modulo_(25),
+  progress_label_("")
 {
   #ifdef OPENMVG_USE_OPENMP
     nb_threads_ = omp_get_max_threads();
@@ -491,11 +496,55 @@ bool Bundle_Adjustment_Ceres::Adjust
 #endif
   ceres_config_options.parameter_tolerance = ceres_options_.parameter_tolerance_;
   ceres_config_options.gradient_tolerance = ceres_options_.gradient_tolerance_;
+  ceres_config_options.update_state_every_iteration = true;
+
+  static std::atomic<std::uint32_t> s_ba_run_id{0};
+  const std::uint32_t ba_run_id = ++s_ba_run_id;
+  const bool enable_progress = ceres_options_.progress_modulo_ > 0;
+  const int modulo = (ceres_options_.progress_modulo_ > 0 && ceres_options_.progress_modulo_ < 100)
+    ? ceres_options_.progress_modulo_
+    : 5;
+  std::string progress_label =
+    "Bundle adjustment progress [run " + std::to_string(ba_run_id) + "]";
+  if (!ceres_options_.progress_label_.empty())
+  {
+    progress_label += " - " + ceres_options_.progress_label_;
+  }
+  std::unique_ptr<openMVG::system::LoggerProgress> progress_bar;
+  if (enable_progress)
+  {
+    progress_bar = std::make_unique<openMVG::system::LoggerProgress>(
+      static_cast<std::uint32_t>(ceres_config_options.max_num_iterations),
+      progress_label,
+      modulo);
+  }
+  struct CeresProgressCallback final : public ceres::IterationCallback
+  {
+    explicit CeresProgressCallback(openMVG::system::LoggerProgress * progress)
+      : progress_(progress)
+    {}
+    ceres::CallbackReturnType operator()(const ceres::IterationSummary &) override
+    {
+      ++(*progress_);
+      return ceres::SOLVER_CONTINUE;
+    }
+    openMVG::system::LoggerProgress * progress_;
+  };
+  std::unique_ptr<CeresProgressCallback> progress_callback;
+  if (progress_bar)
+  {
+    progress_callback = std::make_unique<CeresProgressCallback>(progress_bar.get());
+    ceres_config_options.callbacks.push_back(progress_callback.get());
+  }
 
 
   // Solve BA
   ceres::Solver::Summary summary;
   ceres::Solve(ceres_config_options, &problem, &summary);
+  if (progress_bar && progress_bar->count() < progress_bar->expected_count())
+  {
+    (*progress_bar) += (progress_bar->expected_count() - progress_bar->count());
+  }
   if (ceres_options_.bCeres_summary_)
     OPENMVG_LOG_INFO << summary.FullReport();
 

@@ -93,7 +93,8 @@ class ProgressInterface {
    **/
   int Percent() const
   {
-    return static_cast<int>(count_ / static_cast<float>(expected_count_) * 100.f + 0.5f);
+    const int percent = static_cast<int>(count_ / static_cast<float>(expected_count_) * 100.f + 0.5f);
+    return std::min(100, std::max(0, percent));
   }
 
   //--
