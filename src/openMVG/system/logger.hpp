@@ -10,6 +10,9 @@
 #ifndef OPENMVG_SYSTEM_LOGGER_HPP
 #define OPENMVG_SYSTEM_LOGGER_HPP
 
+#include <chrono>
+#include <ctime>
+#include <iomanip>
 #include <iostream>
 #include <sstream>
 #include <string>
@@ -44,6 +47,21 @@ inline std::string ELogModeToString(const ELogMode & log_mode)
   return {"UNKNOWN: "};
 }
 
+inline std::string TimestampString()
+{
+  const auto now = std::chrono::system_clock::now();
+  const std::time_t now_time_t = std::chrono::system_clock::to_time_t(now);
+  std::tm now_tm;
+#if defined(_WIN32)
+  localtime_s(&now_tm, &now_time_t);
+#else
+  localtime_r(&now_time_t, &now_tm);
+#endif
+  std::ostringstream os;
+  os << std::put_time(&now_tm, "%Y-%m-%d %H:%M:%S");
+  return os.str();
+}
+
 class StreamMessageLogger
 {
 private:
@@ -74,6 +92,7 @@ public:
   {
     ostream_
       << ELogModeToString(mode)
+      << '[' << TimestampString() << "] "
       << '['<< file << ':' << line << "] "
       << message;
     return *this;
