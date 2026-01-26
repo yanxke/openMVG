@@ -13,6 +13,7 @@
 
 #include "openMVG/matching/indMatch.hpp"
 #include "openMVG/graphics/color_gradient.hpp"
+#include "openMVG/system/loggerprogress.hpp"
 #include "openMVG/vector_graphics/svgDrawer.hpp"
 
 namespace openMVG  {
@@ -38,25 +39,30 @@ void PairWiseMatchingToAdjacencyMatrixSVG
 
     const float scaleFactor = 5.0f;
     svg::svgDrawer svgStream((NbImages+3)*5, (NbImages+3)*5);
-    // Go along all possible pair
-    for (size_t I = 0; I < NbImages; ++I) {
-      for (size_t J = 0; J < NbImages; ++J) {
-        // If the pair have matches display a blue boxes at I,J position.
-        auto iterSearch = map_Matches.find({I,J});
-        if (iterSearch != map_Matches.end() && !iterSearch->second.empty())
-        {
-          // Display as a tooltip: (IndexI, IndexJ NbMatches)
-          std::ostringstream os;
-          os << "(" << J << "," << I << " " << iterSearch->second.size() <<")";
-          float r,g,b;
-          heatMapGradient.getColor(iterSearch->second.size() / max_match_count, r, g, b);
-          std::ostringstream os_color;
-          os_color << "rgb(" << int(r * 255) << "," << int(g  * 255) << "," << int(b * 255) << ")";
+    system::LoggerProgress progress(
+      static_cast<std::uint32_t>(map_Matches.size()),
+      "- Adjacency matrix -",
+      10);
+    for (const auto & match_it : map_Matches)
+    {
+      const auto & key = match_it.first;
+      const auto & matches = match_it.second;
+      if (!matches.empty())
+      {
+        const size_t I = key.first;
+        const size_t J = key.second;
+        // Display as a tooltip: (IndexI, IndexJ NbMatches)
+        std::ostringstream os;
+        os << "(" << J << "," << I << " " << matches.size() <<")";
+        float r, g, b;
+        heatMapGradient.getColor(matches.size() / max_match_count, r, g, b);
+        std::ostringstream os_color;
+        os_color << "rgb(" << int(r * 255) << "," << int(g  * 255) << "," << int(b * 255) << ")";
 
-          svgStream << svg::drawSquare(J*scaleFactor, I*scaleFactor, scaleFactor/2.0f,
-            svg::svgAttributes().fill(os_color.str()).noStroke());
-        } // HINT : THINK ABOUT OPACITY [0.4 -> 1.0] TO EXPRESS MATCH COUNT
+        svgStream << svg::drawSquare(J*scaleFactor, I*scaleFactor, scaleFactor/2.0f,
+          svg::svgAttributes().fill(os_color.str()).noStroke());
       }
+      ++progress;
     }
     // Display axes with 0 -> NbImages annotation : _|
     std::ostringstream osNbImages;
