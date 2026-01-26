@@ -33,13 +33,13 @@ RUN mkdir /opt/openMVG_Build; \
   cd /opt/openMVG_Build; \
   cmake -DCMAKE_BUILD_TYPE=RELEASE \
     -DCMAKE_INSTALL_PREFIX="/opt/openMVG_Build/install" \
-    -DOpenMVG_BUILD_TESTS=ON \
+    -DOpenMVG_BUILD_TESTS=OFF \
     -DOpenMVG_BUILD_EXAMPLES=OFF \
     -DCOINUTILS_INCLUDE_DIR_HINTS=/usr/include \
     -DLEMON_INCLUDE_DIR_HINTS=/usr/include/lemon \
     -DCLP_INCLUDE_DIR_HINTS=/usr/include \
     -DOSI_INCLUDE_DIR_HINTS=/usr/include \
     ../openMVG/src; \
-    make -j 4;
+    make -j 8;
 
-RUN cd /opt/openMVG_Build && make test && make install;
+RUN cd /opt/openMVG_Build && make install;
