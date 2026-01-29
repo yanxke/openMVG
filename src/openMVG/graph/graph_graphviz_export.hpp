@@ -11,8 +11,6 @@
 
 #include <lemon/list_graph.h>
 
-#include <cstdlib>
-#include <fstream>
 #include <map>
 #include <string>
 
@@ -73,16 +71,18 @@ inline void exportToGraphvizData
   const indexedGraph & graph
 )
 {
+  // Disable for now.
+
   // Export the graph as a DOT (graph description language) file
-  std::ofstream file(sfile);
-  openMVG::graph::exportToGraphvizFormat_Nodal(graph, file);
-  file.close();
+  // std::ofstream file(sfile);
+  // openMVG::graph::exportToGraphvizFormat_Nodal(graph, file);
+  // file.close();
 
   //Use Graphviz
   const std::string cmd = "neato -Tsvg -O -Goverlap=scale -Gsplines=false " + sfile;
 #ifndef TARGET_OS_IPHONE
-  const int ret = std::system(cmd.c_str());
-  (void)ret;
+  // const int ret = std::system(cmd.c_str());
+  // (void)ret;
 #endif
 }
 

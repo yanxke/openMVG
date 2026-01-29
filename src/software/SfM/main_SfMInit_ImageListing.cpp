@@ -232,6 +232,16 @@ int main(int argc, char **argv)
     }
   }
 
+  const std::string sOutputSfMData =
+    stlplus::create_filespec( sOutputDir, "sfm_data.json" );
+  if ( stlplus::file_exists( sOutputSfMData ) )
+  {
+    OPENMVG_LOG_INFO
+      << "sfm_data.json already exists, skipping image listing: "
+      << sOutputSfMData;
+    return EXIT_SUCCESS;
+  }
+
   if (sKmatrix.size() > 0 &&
     !checkIntrinsicStringValidity(sKmatrix, focal, ppx, ppy) )
   {
@@ -469,7 +479,7 @@ int main(int argc, char **argv)
   // Store SfM_Data views & intrinsic data
   if (!Save(
     sfm_data,
-    stlplus::create_filespec( sOutputDir, "sfm_data.json" ).c_str(),
+    sOutputSfMData.c_str(),
     ESfM_Data(VIEWS|INTRINSICS)))
   {
     return EXIT_FAILURE;

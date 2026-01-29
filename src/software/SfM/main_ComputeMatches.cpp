@@ -134,6 +134,14 @@ int main( int argc, char** argv )
     return EXIT_FAILURE;
   }
 
+  // If the matches already exists, skip recomputation and loading.
+  if ( !bForce && ( stlplus::file_exists( sOutputMatchesFilename ) ) )
+  {
+    OPENMVG_LOG_INFO
+      << "\t PREVIOUS RESULTS LOADED; skipping compute and load.";
+    return EXIT_SUCCESS;
+  }
+
   // -----------------------------
   // . Load SfM_Data Views & intrinsics data
   // . Compute putative descriptor matches
@@ -214,19 +222,7 @@ int main( int argc, char** argv )
   }
 
   OPENMVG_LOG_INFO << " - PUTATIVE MATCHES - ";
-  // If the matches already exists, reload them
-  if ( !bForce && ( stlplus::file_exists( sOutputMatchesFilename ) ) )
-  {
-    if ( !( Load( map_PutativeMatches, sOutputMatchesFilename ) ) )
-    {
-      OPENMVG_LOG_ERROR << "Cannot load input matches file";
-      return EXIT_FAILURE;
-    }
-    OPENMVG_LOG_INFO
-      << "\t PREVIOUS RESULTS LOADED;"
-      << " #pair: " << map_PutativeMatches.size();
-  }
-  else // Compute the putative matches
+  // Compute the putative matches
   {
     // Allocate the right Matcher according the Matching requested method
     std::unique_ptr<Matcher> collectionMatcher;
