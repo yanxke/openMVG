@@ -1,0 +1,52 @@
+.git
+.gitmodules
+**/.git
+**/.gitignore
+**/.DS_Store
+
+# Build outputs
+**/build
+**/Build
+**/cmake-build-*
+**/CMakeFiles
+**/CMakeCache.txt
+**/CMakeScripts
+**/Makefile
+**/cmake_install.cmake
+**/install
+
+# Artifacts
+**/*.o
+**/*.a
+**/*.so
+**/*.so.*
+**/*.dylib
+**/*.dll
+**/*.exe
+**/*.pdb
+**/*.obj
+**/*.lib
+**/*.log
+
+# Python
+**/__pycache__
+**/*.pyc
+
+# IDE
+**/.vscode
+**/.idea
+
+# Local data / results
+**/data
+**/datasets
+**/results
+**/output
+**/outputs
+**/logs
+**/tmp
+**/temp
+**/cache
+**/.cache
+
+# Docker build cache directory
+.buildx-cache
