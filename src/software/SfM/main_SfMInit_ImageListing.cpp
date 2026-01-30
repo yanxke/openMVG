@@ -98,6 +98,69 @@ bool getGPS
   return false;
 }
 
+bool computeSensorWidthFromExif(const Exif_IO &exifReader,
+  const double image_width_px,
+  const double image_height_px,
+  double &sensor_width_mm,
+  std::string &method)
+{
+  const double focal_mm = static_cast<double>(exifReader.getFocal());
+  const double focal_35mm = static_cast<double>(exifReader.getFocalLengthIn35mm());
+  if (focal_mm <= 0.0 || focal_35mm <= 0.0)
+  {
+    // Fall through to focal plane resolution-based estimate.
+  }
+  else
+  {
+    sensor_width_mm = 36.0 * focal_mm / focal_35mm;
+    method = "35mm_equivalent";
+    return sensor_width_mm > 0.0;
+  }
+
+  const double x_resolution = static_cast<double>(exifReader.getFocalPlaneXResolution());
+  const double y_resolution = static_cast<double>(exifReader.getFocalPlaneYResolution());
+  const int resolution_unit = exifReader.getFocalPlaneResolutionUnit();
+  double unit_mm = 0.0;
+  switch (resolution_unit)
+  {
+    case 2: // inch
+      unit_mm = 25.4;
+      break;
+    case 3: // centimeter
+      unit_mm = 10.0;
+      break;
+    case 4: // millimeter
+      unit_mm = 1.0;
+      break;
+    case 5: // micrometer
+      unit_mm = 0.001;
+      break;
+    default:
+      unit_mm = 0.0;
+      break;
+  }
+
+  if (unit_mm <= 0.0)
+  {
+    return false;
+  }
+
+  if (x_resolution > 0.0 && image_width_px > 0.0)
+  {
+    sensor_width_mm = image_width_px / x_resolution * unit_mm;
+    method = "focal_plane_x_resolution";
+    return sensor_width_mm > 0.0;
+  }
+
+  if (y_resolution > 0.0 && image_height_px > 0.0)
+  {
+    sensor_width_mm = image_height_px / y_resolution * unit_mm;
+    method = "focal_plane_y_resolution";
+    return sensor_width_mm > 0.0;
+  }
+
+  return false;
+}
 
 /// Check string of prior weights
 std::pair<bool, Vec3> checkPriorWeightsString
@@ -282,6 +345,8 @@ int main(int argc, char **argv)
   Views & views = sfm_data.views;
   Intrinsics & intrinsics = sfm_data.intrinsics;
 
+  bool sensor_report_printed = false;
+
   system::LoggerProgress my_progress_bar(vec_image.size(), "- Listing images -" );
   std::ostringstream error_report_stream;
   for ( std::vector<std::string>::const_iterator iter_image = vec_image.begin();
@@ -356,10 +421,49 @@ int main(int argc, char **argv)
           const std::string sCamModel = exifReader->getBrand() + " " + exifReader->getModel();
 
           Datasheet datasheet;
-          if ( getInfo( sCamModel, vec_database, datasheet ))
+          const bool has_db_entry = getInfo( sCamModel, vec_database, datasheet );
+          double exif_sensor_width_mm = -1.0;
+          std::string exif_sensor_method;
+          const bool has_exif_sensor_width = computeSensorWidthFromExif(
+            *exifReader, width, height, exif_sensor_width_mm, exif_sensor_method);
+
+          if (!sensor_report_printed)
+          {
+            std::ostringstream report;
+            report << "Sensor width report for model: " << sCamModel;
+            if (has_exif_sensor_width)
+            {
+            report << "\n- EXIF-derived sensor width (35mm equiv): " << exif_sensor_width_mm << " mm";
+            if (!exif_sensor_method.empty())
+            {
+              report << " [" << exif_sensor_method << "]";
+            }
+          }
+          else
+          {
+            report << "\n- EXIF-derived sensor width (35mm equiv): unavailable";
+          }
+            if (!vec_database.empty() && has_db_entry)
+            {
+              report << "\n- Sensor database width: " << datasheet.sensorSize_ << " mm";
+            }
+            else if (!vec_database.empty())
+            {
+              report << "\n- Sensor database width: not found for model";
+            }
+            OPENMVG_LOG_INFO << report.str();
+            sensor_report_printed = true;
+          }
+
+          if (has_db_entry)
           {
             // The camera model was found in the database so we can compute it's approximated focal length
             const double ccdw = datasheet.sensorSize_;
+            focal = std::max ( width, height ) * exifReader->getFocal() / ccdw;
+          }
+          else if (has_exif_sensor_width)
+          {
+            const double ccdw = exif_sensor_width_mm;
             focal = std::max ( width, height ) * exifReader->getFocal() / ccdw;
           }
           else

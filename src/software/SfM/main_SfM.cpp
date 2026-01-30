@@ -7,7 +7,9 @@
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 #include "openMVG/cameras/Camera_Common.hpp"
+#include "openMVG/cameras/Camera_Pinhole.hpp"
 #include "openMVG/cameras/Cameras_Common_command_line_helper.hpp"
+#include "openMVG/exif/exif_IO_EasyExif.hpp"
 
 #include "openMVG/sfm/pipelines/sfm_features_provider.hpp"
 #include "openMVG/sfm/pipelines/sfm_matches_provider.hpp"
@@ -33,14 +35,91 @@
 
 #include <glog/logging.h>
 
+#include <algorithm>
 #include <cstdlib>
 #include <memory>
 #include <string>
 #include <utility>
+#include <vector>
 
 using namespace openMVG;
 using namespace openMVG::cameras;
 using namespace openMVG::sfm;
+
+bool computeMedianSensorWidthMm(const SfM_Data & sfm_data, double & median_sensor_width_mm, size_t & sample_count)
+{
+  std::vector<double> sensor_widths_mm;
+  sensor_widths_mm.reserve(sfm_data.GetViews().size());
+
+  for (const auto & view_it : sfm_data.GetViews())
+  {
+    const View * view = view_it.second.get();
+    if (!view)
+    {
+      continue;
+    }
+    const auto intrinsic_it = sfm_data.GetIntrinsics().find(view->id_intrinsic);
+    if (intrinsic_it == sfm_data.GetIntrinsics().end())
+    {
+      continue;
+    }
+
+    const auto * pinhole = dynamic_cast<const Pinhole_Intrinsic*>(intrinsic_it->second.get());
+    if (!pinhole)
+    {
+      continue;
+    }
+    const double focal_pix = pinhole->focal();
+    if (focal_pix <= 0.0)
+    {
+      continue;
+    }
+
+    const std::string image_path =
+      stlplus::create_filespec(sfm_data.s_root_path, view->s_Img_path);
+    std::unique_ptr<exif::Exif_IO> exif_reader(new exif::Exif_IO_EasyExif);
+    if (!exif_reader->open(image_path) || !exif_reader->doesHaveExifInfo())
+    {
+      continue;
+    }
+    const double focal_mm = static_cast<double>(exif_reader->getFocal());
+    if (focal_mm <= 0.0)
+    {
+      continue;
+    }
+
+    const double max_dim = static_cast<double>(std::max(pinhole->w(), pinhole->h()));
+    if (max_dim <= 0.0)
+    {
+      continue;
+    }
+
+    const double sensor_width_mm = max_dim * focal_mm / focal_pix;
+    if (sensor_width_mm > 0.0)
+    {
+      sensor_widths_mm.push_back(sensor_width_mm);
+    }
+  }
+
+  if (sensor_widths_mm.empty())
+  {
+    sample_count = 0;
+    return false;
+  }
+
+  std::sort(sensor_widths_mm.begin(), sensor_widths_mm.end());
+  sample_count = sensor_widths_mm.size();
+  if (sensor_widths_mm.size() % 2 == 1)
+  {
+    median_sensor_width_mm = sensor_widths_mm[sensor_widths_mm.size() / 2];
+  }
+  else
+  {
+    const size_t mid = sensor_widths_mm.size() / 2;
+    median_sensor_width_mm = 0.5 * (sensor_widths_mm[mid - 1] + sensor_widths_mm[mid]);
+  }
+  return true;
+}
 
 
 enum class ESfMSceneInitializer
@@ -617,6 +696,19 @@ int main(int argc, char **argv)
   if (sfm_engine->Process())
   {
     OPENMVG_LOG_INFO << " Total Sfm took (s): " << timer.elapsed();
+
+    double median_sensor_width_mm = 0.0;
+    size_t sensor_width_samples = 0;
+    if (computeMedianSensorWidthMm(sfm_engine->Get_SfM_Data(), median_sensor_width_mm, sensor_width_samples))
+    {
+      OPENMVG_LOG_INFO << "Median adjusted sensor width (mm) from EXIF focal: "
+                       << median_sensor_width_mm
+                       << " (samples: " << sensor_width_samples << ")";
+    }
+    else
+    {
+      OPENMVG_LOG_INFO << "Median adjusted sensor width (mm) unavailable (no valid EXIF focal + pinhole intrinsics).";
+    }
 
     OPENMVG_LOG_INFO << "...Generating SfM_Report.html";
     Generate_SfM_Report(sfm_engine->Get_SfM_Data(),
