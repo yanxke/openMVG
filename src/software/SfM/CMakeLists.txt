@@ -171,6 +171,7 @@ target_link_libraries(openMVG_main_SfM
     openMVG_image
     openMVG_features
     openMVG_sfm
+    openMVG_exif
     ${STLPLUS_LIBRARY}
 )
 
