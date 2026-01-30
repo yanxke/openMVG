@@ -243,9 +243,7 @@ int main(int argc, char **argv)
             << "------------------" << "\n"
             << "-- Tracks Stats --" << "\n"
             << " Tracks number: " << tracks_builder.NbTracks() << "\n"
-            << " Images Id: " << "\n";
-          std::copy(images_id.begin(), images_id.end(),
-            std::ostream_iterator<uint32_t>(track_stream, ", "));
+            << " Images: " << images_id.size() << "\n";
           track_stream << "\n------------------" << "\n";
 
           std::map<uint32_t, uint32_t> track_length_histogram;
