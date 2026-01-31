@@ -146,6 +146,12 @@ class Exif_IO_EasyExif : public Exif_IO
     */
     bool GPSAltitude(double * altitude) const  override;
 
+    /**
+    * @brief Try to read and save the EXIF GPS image direction
+    * @return If GPS Image Direction can be read & exported, return true
+    */
+    bool GPSImageDirection(double * heading) const override;
+
 
   private:
 

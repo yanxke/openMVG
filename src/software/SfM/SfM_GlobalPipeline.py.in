@@ -109,16 +109,46 @@ with open(log_path, "a") as log_file:
            [os.path.join(OPENMVG_SFM_BIN, "openMVG_main_ComputeMatches"), "-i", matches_dir+"/sfm_data.json", "-p", matches_dir+ "/pairs.bin", "-o", matches_dir + "/matches.putative.bin", "-r", str(args.ratio)],
            log_file)
 
-  run_step("5. Filter matches",
-           [os.path.join(OPENMVG_SFM_BIN, "openMVG_main_GeometricFilter"), "-i", matches_dir+"/sfm_data.json", "-m", matches_dir+"/matches.putative.bin" , "-g" , "e" , "-o" , matches_dir+"/matches.e.bin"],
+  # 5. Filter matches with motion priors integrated into RANSAC
+  # Motion priors enforce: landscape mode (roll~0), horizontal optical axis (pitch~0),
+  # GPS compass consistency (yaw), and flat surface (ty~0)
+  run_step("5. Filter matches with priors",
+           [os.path.join(OPENMVG_SFM_BIN, "openMVG_main_GeometricFilterWithPriors"),
+            "-i", matches_dir+"/sfm_data.json",
+            "-m", matches_dir+"/matches.putative.bin",
+            "-g", "e",
+            "-o", matches_dir+"/matches.e.bin",
+            "-y", "15.0",  # Yaw tolerance (degrees)
+            "-x", "10.0",  # Pitch tolerance (degrees)
+            "-z", "10.0",  # Roll tolerance (degrees)
+            "-a", "0.2",   # Altitude (ty) tolerance
+            "-w", "1.0"    # Prior weight in RANSAC scoring
+            ],
            log_file)
+
+  # 5b. Optional: Additional post-filtering by priors (now mostly redundant since priors are in step 5)
+  # Uncomment if you want stricter filtering after RANSAC
+  # run_step("5b. Filter matches by priors",
+  #           [os.path.join(OPENMVG_SFM_BIN, "openMVG_main_GeometricFilterByPriors"),
+  #           "-i", os.path.join(matches_dir, "sfm_data.json"),
+  #           "-m", os.path.join(matches_dir, "matches.e.bin"),
+  #           "-o", os.path.join(matches_dir, "matches.e.priors.bin"),
+  #           "-f", matches_dir,
+  #           "-y", "15.0", # Yaw tolerance
+  #           "-x", "10.0", # Pitch tolerance
+  #           "-z", "10.0", # Roll tolerance
+  #           "-a", "0.2"   # Altitude (ty) tolerance
+  #           ],
+  #           log_file)
+
+  actual_matches = os.path.join(matches_dir, "matches.e.bin")
 
   # Create the reconstruction if not present
   if not os.path.exists(reconstruction_dir):
     os.mkdir(reconstruction_dir)
 
   run_step("6. Do Global reconstruction",
-           [os.path.join(OPENMVG_SFM_BIN, "openMVG_main_SfM"), "--sfm_engine", "GLOBAL", "--input_file", matches_dir+"/sfm_data.json", "--match_file", matches_dir+"/matches.e.bin", "--output_dir", reconstruction_dir, "--rotationAveraging", "1", "-P"],
+           [os.path.join(OPENMVG_SFM_BIN, "openMVG_main_SfM"), "--sfm_engine", "GLOBAL", "--input_file", matches_dir+"/sfm_data.json", "--match_file", actual_matches, "--output_dir", reconstruction_dir, "--rotationAveraging", "1", "-P"],
            log_file)
 
   # run_step("7. Colorize Structure",

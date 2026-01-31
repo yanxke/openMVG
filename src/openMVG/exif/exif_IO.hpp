@@ -136,6 +136,12 @@ class Exif_IO
     */
     virtual bool GPSAltitude(double * altitude) const = 0;
 
+    /**
+    * @brief Try to read and save the EXIF GPS image direction
+    * @return If GPS Image Direction can be read & exported, return true
+    */
+    virtual bool GPSImageDirection(double * heading) const = 0;
+
 };
 
 } // namespace exif

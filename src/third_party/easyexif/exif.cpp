@@ -851,6 +851,14 @@ int easyexif::EXIFInfo::parseFromEXIFSegment(const unsigned char *buf,
                 buf + data + tiff_header_start, alignIntel);
           }
           break;
+
+        case 17:
+          // GPS image direction
+          if ((format == 5 || format == 10)) {
+            this->GeoLocation.ImgDirection = parse_value<Rational>(
+                buf + data + tiff_header_start, alignIntel);
+          }
+          break;
       }
       offs += 12;
     }
@@ -898,6 +906,7 @@ void easyexif::EXIFInfo::clear() {
   GeoLocation.Altitude = std::numeric_limits<double>::infinity();
   GeoLocation.AltitudeRef = 0;
   GeoLocation.DOP = std::numeric_limits<double>::infinity();
+  GeoLocation.ImgDirection = std::numeric_limits<double>::infinity();
   GeoLocation.LatComponents.degrees = std::numeric_limits<double>::infinity();
   GeoLocation.LatComponents.minutes = std::numeric_limits<double>::infinity();
   GeoLocation.LatComponents.seconds = std::numeric_limits<double>::infinity();
