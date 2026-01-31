@@ -193,14 +193,18 @@ bool Bundle_Adjustment_Ceres::Adjust
     }
   }
 
+  static bool s_motion_prior_log_emitted = false;
+
   bool use_motion_priors = options.use_motion_priors_opt;
   if (!use_motion_priors && pose_center_prior_count > 0)
   {
-    OPENMVG_LOG_WARNING << "Motion priors requested by data but -P is disabled. Enabling priors for this BA run.";
+    if (!s_motion_prior_log_emitted)
+    {
+      OPENMVG_LOG_WARNING << "Motion priors requested by data but -P is disabled. Enabling priors for this BA run. Only print this once per session.";
+    }
     use_motion_priors = true;
   }
 
-  static bool s_motion_prior_log_emitted = false;
   if (!s_motion_prior_log_emitted)
   {
     if (use_motion_priors)
