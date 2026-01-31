@@ -173,6 +173,62 @@ bool Bundle_Adjustment_Ceres::Adjust
   const Optimize_Options & options
 )
 {
+  size_t view_priors_count = 0;
+  size_t pose_center_prior_count = 0;
+  size_t pose_center_with_pose_count = 0;
+  for (const auto & view_it : sfm_data.GetViews())
+  {
+    const sfm::ViewPriors * prior = dynamic_cast<sfm::ViewPriors*>(view_it.second.get());
+    if (prior != nullptr)
+    {
+      ++view_priors_count;
+      if (prior->b_use_pose_center_)
+      {
+        ++pose_center_prior_count;
+        if (sfm_data.IsPoseAndIntrinsicDefined(prior))
+        {
+          ++pose_center_with_pose_count;
+        }
+      }
+    }
+  }
+
+  bool use_motion_priors = options.use_motion_priors_opt;
+  if (!use_motion_priors && pose_center_prior_count > 0)
+  {
+    OPENMVG_LOG_WARNING << "Motion priors requested by data but -P is disabled. Enabling priors for this BA run.";
+    use_motion_priors = true;
+  }
+
+  static bool s_motion_prior_log_emitted = false;
+  if (!s_motion_prior_log_emitted)
+  {
+    if (use_motion_priors)
+    {
+      OPENMVG_LOG_INFO << "Motion priors enabled: view_priors=" << view_priors_count
+                       << ", pose_center_prior=" << pose_center_prior_count
+                       << ", pose_center_with_pose=" << pose_center_with_pose_count << ".";
+      if (pose_center_prior_count == 0)
+      {
+        OPENMVG_LOG_WARNING << "Motion priors enabled but no pose center priors were found.";
+      }
+      if (view_priors_count == 0)
+      {
+        OPENMVG_LOG_WARNING << "No view_priors were deserialized. Check polymorphic_name=view_priors in sfm_data.json.";
+      }
+    }
+    else
+    {
+      OPENMVG_LOG_INFO << "Motion priors disabled.";
+    }
+    if (!sfm_data.GetViews().empty())
+    {
+      OPENMVG_LOG_INFO << "BA view[0] type: "
+                       << typeid(*sfm_data.GetViews().begin()->second).name();
+    }
+    s_motion_prior_log_emitted = true;
+  }
+
   //----------
   // Add camera parameters
   // - intrinsics
@@ -186,20 +242,33 @@ bool Bundle_Adjustment_Ceres::Adjust
   double pose_center_robust_fitting_error = 0.0;
   openMVG::geometry::Similarity3 sim_to_center;
   bool b_usable_prior = false;
-  if (options.use_motion_priors_opt && sfm_data.GetViews().size() > 3)
+  if (use_motion_priors && sfm_data.GetViews().size() > 3)
   {
     // - Compute a robust X-Y affine transformation & apply it
     // - This early transformation enhance the conditionning (solution closer to the Prior coordinate system)
     {
       // Collect corresponding camera centers
       std::vector<Vec3> X_SfM, X_GPS;
+      size_t prior_view_count = 0;
+      size_t valid_pose_prior_count = 0;
+      size_t view_priors_count = 0;
       for (const auto & view_it : sfm_data.GetViews())
       {
         const sfm::ViewPriors * prior = dynamic_cast<sfm::ViewPriors*>(view_it.second.get());
-        if (prior != nullptr && prior->b_use_pose_center_ && sfm_data.IsPoseAndIntrinsicDefined(prior))
+        if (prior != nullptr && prior->b_use_pose_center_)
         {
-          X_SfM.push_back( sfm_data.GetPoses().at(prior->id_pose).center() );
-          X_GPS.push_back( prior->pose_center_ );
+          ++view_priors_count;
+          ++prior_view_count;
+          if (sfm_data.IsPoseAndIntrinsicDefined(prior))
+          {
+            ++valid_pose_prior_count;
+            X_SfM.push_back( sfm_data.GetPoses().at(prior->id_pose).center() );
+            X_GPS.push_back( prior->pose_center_ );
+          }
+        }
+        else if (prior != nullptr)
+        {
+          // ViewPriors without pose center prior flag are ignored.
         }
       }
       openMVG::geometry::Similarity3 sim;
@@ -239,7 +308,11 @@ bool Bundle_Adjustment_Ceres::Adjust
       }
       else
       {
-        OPENMVG_LOG_WARNING << "Cannot used the motion prior, insufficient number of motion priors/poses";
+        OPENMVG_LOG_WARNING << "Cannot use motion priors: need >= 4 valid pose-center priors with defined poses."
+                 << " Found " << valid_pose_prior_count << " valid prior(s) out of "
+                 << prior_view_count << " prior-flagged view(s), "
+                 << view_priors_count << " view_priors view(s), across "
+                 << sfm_data.GetViews().size() << " view(s).";
       }
     }
   }

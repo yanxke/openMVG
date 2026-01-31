@@ -115,6 +115,38 @@ bool Load_Cereal(
       if ( version >= "0.3" )
       {
         archive(cereal::make_nvp("views", data.views));
+        {
+          size_t view_priors_count = 0;
+          size_t pose_center_prior_count = 0;
+          const sfm::ViewPriors * sample_prior = nullptr;
+          for (const auto & view_it : data.views)
+          {
+            const sfm::ViewPriors * prior = dynamic_cast<sfm::ViewPriors*>(view_it.second.get());
+            if (prior != nullptr)
+            {
+              ++view_priors_count;
+              if (!sample_prior)
+                sample_prior = prior;
+              if (prior->b_use_pose_center_)
+              {
+                ++pose_center_prior_count;
+              }
+            }
+          }
+          OPENMVG_LOG_INFO << "Loaded views: " << data.views.size()
+                           << ", view_priors=" << view_priors_count
+                           << ", pose_center_prior=" << pose_center_prior_count << ".";
+          if (!data.views.empty())
+          {
+            OPENMVG_LOG_INFO << "Loaded view[0] type: "
+                             << typeid(*data.views.begin()->second).name();
+          }
+          if (sample_prior)
+          {
+            OPENMVG_LOG_INFO << "Loaded sample ViewPriors type: "
+                             << typeid(*sample_prior).name();
+          }
+        }
       }
       else // sfm_data version is < to v0.3 => Previous to OpenMVG v1.1
       {

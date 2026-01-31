@@ -118,10 +118,7 @@ bool GlobalSfM_Rotation_AveragingSolver::Run(
       bSuccess = rotation_averaging::l1::GlobalRotationsRobust(
         relativeRotations, vec_globalR, nMainViewID, 0.0f, &vec_inliers);
 
-      std::ostringstream os;
-      os  << "\ninliers:\n";
-      std::copy(vec_inliers.begin(), vec_inliers.end(), std::ostream_iterator<bool>(os, " "));
-      OPENMVG_LOG_INFO << os.str();
+      // Suppress verbose inlier mask logging.
 
       // save kept pairs (restore original pose indices using the backward reindexing)
       for (size_t i = 0; i < vec_inliers.size(); ++i)

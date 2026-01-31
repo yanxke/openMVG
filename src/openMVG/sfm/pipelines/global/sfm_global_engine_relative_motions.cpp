@@ -22,6 +22,7 @@
 #include "openMVG/sfm/sfm_data_filters.hpp"
 #include "openMVG/sfm/sfm_data_triangulation.hpp"
 #include "openMVG/sfm/sfm_filters.hpp"
+#include "openMVG/sfm/sfm_view_priors.hpp"
 #include "openMVG/stl/stl.hpp"
 #include "openMVG/system/timer.hpp"
 #include "openMVG/system/logger.hpp"
@@ -365,20 +366,11 @@ bool GlobalSfMReconstructionEngine_RelativeMotions::Compute_Initial_Structure
 
     {
       std::ostringstream osTrack;
-      //-- Display stats:
-      //    - number of images
-      //    - number of tracks
-      std::set<uint32_t> set_imagesId;
-      TracksUtilsMap::ImageIdInTracks(map_selectedTracks, set_imagesId);
+      //-- Display stats (suppress image id listing)
       osTrack
         << "\n------------------\n"
         << "-- Tracks Stats --\n"
-        << " Tracks number: " << tracksBuilder.NbTracks() << "\n"
-        << " Images Id: \n";
-      std::copy(set_imagesId.begin(),
-        set_imagesId.end(),
-        std::ostream_iterator<uint32_t>(osTrack, ", "));
-      osTrack << "\n------------------\n";
+        << " Tracks number: " << tracksBuilder.NbTracks() << "\n";
 
       std::map<uint32_t, uint32_t> map_Occurrence_TrackLength;
       TracksUtilsMap::TracksLength(map_selectedTracks, map_Occurrence_TrackLength);
@@ -420,8 +412,25 @@ bool GlobalSfMReconstructionEngine_RelativeMotions::Adjust()
   // Refine sfm_scene (in a 3 iteration process (free the parameters regarding their uncertainty order)):
 
   Bundle_Adjustment_Ceres bundle_adjustment_obj;
+  size_t view_priors_count = 0;
+  size_t pose_center_prior_count = 0;
+  for (const auto & view_it : sfm_data_.GetViews())
+  {
+    const sfm::ViewPriors * prior = dynamic_cast<sfm::ViewPriors*>(view_it.second.get());
+    if (prior != nullptr)
+    {
+      ++view_priors_count;
+      if (prior->b_use_pose_center_)
+      {
+        ++pose_center_prior_count;
+      }
+    }
+  }
   // - refine only Structure and translations
-  OPENMVG_LOG_INFO << "Bundle adjustment: refine translations + structure...";
+  OPENMVG_LOG_INFO << "Bundle adjustment: refine translations + structure..."
+                   << " (motion priors " << (this->b_use_motion_prior_ ? "enabled" : "disabled")
+                   << ", view_priors=" << view_priors_count
+                   << ", pose_center_prior=" << pose_center_prior_count << ")";
   bundle_adjustment_obj.ceres_options().progress_modulo_ = 5;
   bundle_adjustment_obj.ceres_options().progress_label_ = "T + X";
   bool b_BA_Status = bundle_adjustment_obj.Adjust
@@ -444,7 +453,10 @@ bool GlobalSfMReconstructionEngine_RelativeMotions::Adjust()
     }
 
     // - refine only Structure and Rotations & translations
-    OPENMVG_LOG_INFO << "Bundle adjustment: refine rotations + translations + structure...";
+    OPENMVG_LOG_INFO << "Bundle adjustment: refine rotations + translations + structure..."
+             << " (motion priors " << (this->b_use_motion_prior_ ? "enabled" : "disabled")
+             << ", view_priors=" << view_priors_count
+             << ", pose_center_prior=" << pose_center_prior_count << ")";
     bundle_adjustment_obj.ceres_options().progress_modulo_ = 5;
     bundle_adjustment_obj.ceres_options().progress_label_ = "R + T + X";
     b_BA_Status = bundle_adjustment_obj.Adjust
@@ -467,7 +479,10 @@ bool GlobalSfMReconstructionEngine_RelativeMotions::Adjust()
 
   if (b_BA_Status && ReconstructionEngine::intrinsic_refinement_options_ != Intrinsic_Parameter_Type::NONE) {
     // - refine all: Structure, motion:{rotations, translations} and optics:{intrinsics}
-    OPENMVG_LOG_INFO << "Bundle adjustment: refine intrinsics + motion + structure...";
+    OPENMVG_LOG_INFO << "Bundle adjustment: refine intrinsics + motion + structure..."
+             << " (motion priors " << (this->b_use_motion_prior_ ? "enabled" : "disabled")
+             << ", view_priors=" << view_priors_count
+             << ", pose_center_prior=" << pose_center_prior_count << ")";
     bundle_adjustment_obj.ceres_options().progress_modulo_ = 2;
     bundle_adjustment_obj.ceres_options().progress_label_ = "K + R + T + X";
     b_BA_Status = bundle_adjustment_obj.Adjust
@@ -529,7 +544,10 @@ bool GlobalSfMReconstructionEngine_RelativeMotions::Adjust()
     Control_Point_Parameter(),
     this->b_use_motion_prior_);
 
-  OPENMVG_LOG_INFO << "Bundle adjustment: final refine after outlier removal...";
+  OPENMVG_LOG_INFO << "Bundle adjustment: final refine after outlier removal..."
+                   << " (motion priors " << (this->b_use_motion_prior_ ? "enabled" : "disabled")
+                   << ", view_priors=" << view_priors_count
+                   << ", pose_center_prior=" << pose_center_prior_count << ")";
   bundle_adjustment_obj.ceres_options().progress_modulo_ = 2;
   bundle_adjustment_obj.ceres_options().progress_label_ = "final";
   b_BA_Status = bundle_adjustment_obj.Adjust(sfm_data_, ba_refine_options);

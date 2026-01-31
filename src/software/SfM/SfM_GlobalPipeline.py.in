@@ -118,7 +118,7 @@ with open(log_path, "a") as log_file:
     os.mkdir(reconstruction_dir)
 
   run_step("6. Do Global reconstruction",
-           [os.path.join(OPENMVG_SFM_BIN, "openMVG_main_SfM"), "--sfm_engine", "GLOBAL", "--input_file", matches_dir+"/sfm_data.json", "--match_file", matches_dir+"/matches.e.bin", "--output_dir", reconstruction_dir, "--rotationAveraging", "1"],
+           [os.path.join(OPENMVG_SFM_BIN, "openMVG_main_SfM"), "--sfm_engine", "GLOBAL", "--input_file", matches_dir+"/sfm_data.json", "--match_file", matches_dir+"/matches.e.bin", "--output_dir", reconstruction_dir, "--rotationAveraging", "1", "-P"],
            log_file)
 
   run_step("7. Colorize Structure",

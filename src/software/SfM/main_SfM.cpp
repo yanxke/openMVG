@@ -17,6 +17,7 @@
 #include "openMVG/sfm/sfm_data_io.hpp"
 #include "openMVG/sfm/sfm_report.hpp"
 #include "openMVG/sfm/sfm_view.hpp"
+#include "openMVG/sfm/sfm_view_priors.hpp"
 #include "openMVG/system/timer.hpp"
 #include "openMVG/types.hpp"
 
@@ -409,6 +410,9 @@ int main(int argc, char **argv)
   }
 
   b_use_motion_priors = cmd.used('P');
+  OPENMVG_LOG_INFO << "Motion priors (-P) "
+                   << (b_use_motion_priors ? "enabled" : "disabled")
+                   << ".";
 
   // Check validity of command line parameters:
   if ( !isValid(static_cast<ETriangulationMethod>(triangulation_method))) {
@@ -496,6 +500,19 @@ int main(int argc, char **argv)
   if (!Load(sfm_data, filename_sfm_data, sfm_data_loading_etypes)) {
     OPENMVG_LOG_ERROR << "The input SfM_Data file \""<< filename_sfm_data << "\" cannot be read.";
     return EXIT_FAILURE;
+  }
+
+  {
+    size_t prior_view_count = 0;
+    for (const auto & view_it : sfm_data.GetViews())
+    {
+      const sfm::ViewPriors * prior = dynamic_cast<sfm::ViewPriors*>(view_it.second.get());
+      if (prior != nullptr && prior->b_use_pose_center_)
+      {
+        ++prior_view_count;
+      }
+    }
+    OPENMVG_LOG_INFO << "Loaded pose-center priors: " << prior_view_count << " view(s).";
   }
 
   if (!stlplus::folder_exists(directory_output))
