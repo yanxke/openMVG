@@ -9,6 +9,7 @@
 #include "openMVG/sfm/pipelines/global/sfm_global_engine_relative_motions.hpp"
 
 #include "openMVG/cameras/Camera_Common.hpp"
+#include "openMVG/exif/exif_IO_EasyExif.hpp"
 #include "openMVG/graph/graph.hpp"
 #include "openMVG/features/feature.hpp"
 #include "openMVG/matching/indMatch.hpp"
@@ -36,11 +37,107 @@
 
 #include <ceres/types.h>
 
+#include <Eigen/Dense>
+#include <algorithm>
+#include <cmath>
 #include <iostream>
+#include <limits>
+#include <sstream>
 
 #ifdef _MSC_VER
 #pragma warning( once : 4267 ) //warning C4267: 'argument' : conversion from 'size_t' to 'const int', possible loss of data
 #endif
+
+namespace {
+
+bool ParseImuRotationFromUserComment(const std::string & comment, openMVG::Mat3 & rotation_dw)
+{
+  const std::string key = "Rotation:";
+  const std::size_t pos = comment.find(key);
+  if (pos == std::string::npos)
+    return false;
+
+  std::string rot_part = comment.substr(pos + key.size());
+  for (char & c : rot_part)
+  {
+    if (c == '\n' || c == '\r')
+      c = ' ';
+  }
+
+  std::vector<double> vals;
+  vals.reserve(9);
+  std::string token;
+  std::stringstream ss(rot_part);
+  while (std::getline(ss, token, ','))
+  {
+    std::stringstream t(token);
+    double v = 0.0;
+    if (t >> v)
+      vals.push_back(v);
+  }
+  if (vals.size() < 9)
+    return false;
+
+  rotation_dw << vals[0], vals[1], vals[2],
+                  vals[3], vals[4], vals[5],
+                  vals[6], vals[7], vals[8];
+  return true;
+}
+
+openMVG::Mat3 DeviceToCameraRotation()
+{
+  // Rear camera, device axes to camera axes (X right, Y down, Z forward).
+  openMVG::Mat3 R;
+  R << 1.0, 0.0, 0.0,
+       0.0, -1.0, 0.0,
+       0.0, 0.0, -1.0;
+  return R;
+}
+
+openMVG::Mat3 DeviceLandscapeLeftRemap()
+{
+  // Landscape-left: phone rotated 90° CCW from portrait (top of phone on left).
+  // This matrix transforms from portrait device axes to landscape device axes.
+  // When multiplied as R_dc_portrait * R_landscape, gives R_dc_landscape.
+  // Portrait -> Landscape: X -> -Y, Y -> X, Z -> Z (90° CW about Z).
+  openMVG::Mat3 R;
+  R << 0.0, -1.0, 0.0,
+       1.0, 0.0, 0.0,
+       0.0, 0.0, 1.0;
+  return R;
+}
+
+double RotationAngularErrorDeg(const openMVG::Mat3 & R_est, const openMVG::Mat3 & R_prior)
+{
+  const openMVG::Mat3 R_err = R_est * R_prior.transpose();
+  return openMVG::R2D(openMVG::getRotationMagnitude(R_err));
+}
+
+openMVG::Mat3 BestFitRotation(const std::vector<std::pair<openMVG::Mat3, openMVG::Mat3>> & pairs)
+{
+  if (pairs.empty())
+    return openMVG::Mat3::Identity();
+
+  openMVG::Mat3 M = openMVG::Mat3::Zero();
+  for (const auto & pair : pairs)
+  {
+    const openMVG::Mat3 & R_global = pair.first;
+    const openMVG::Mat3 & R_imu = pair.second;
+    M += R_imu * R_global.transpose();
+  }
+
+  Eigen::JacobiSVD<openMVG::Mat3> svd(M, Eigen::ComputeFullU | Eigen::ComputeFullV);
+  openMVG::Mat3 R = svd.matrixU() * svd.matrixV().transpose();
+  if (R.determinant() < 0.0)
+  {
+    openMVG::Mat3 U = svd.matrixU();
+    U.col(2) *= -1.0;
+    R = U * svd.matrixV().transpose();
+  }
+  return R;
+}
+
+} // namespace
 
 namespace openMVG{
 namespace sfm{
@@ -108,6 +205,18 @@ void GlobalSfMReconstructionEngine_RelativeMotions::SetTranslationAveragingMetho
 )
 {
   eTranslation_averaging_method_ = eTranslationAveragingMethod;
+}
+
+void GlobalSfMReconstructionEngine_RelativeMotions::SetImuRotationPrior(
+  double weight,
+  bool filter_outliers,
+  double max_error_deg,
+  double histogram_bucket_deg)
+{
+  imu_rotation_weight_ = weight;
+  imu_rotation_filter_outliers_ = filter_outliers;
+  imu_rotation_max_error_deg_ = max_error_deg;
+  imu_rotation_histogram_bucket_deg_ = histogram_bucket_deg;
 }
 
 bool GlobalSfMReconstructionEngine_RelativeMotions::Process() {
@@ -204,15 +313,194 @@ bool GlobalSfMReconstructionEngine_RelativeMotions::Compute_Global_Rotations
     TRIPLET_ROTATION_INFERENCE_COMPOSITION_ERROR;
     //TRIPLET_ROTATION_INFERENCE_NONE;
 
-  system::Timer t;
-  GlobalSfM_Rotation_AveragingSolver rotation_averaging_solver;
-  const bool b_rotation_averaging = rotation_averaging_solver.Run(
-    eRotation_averaging_method_, eRelativeRotationInferenceMethod,
-    relatives_R, global_rotations);
+  rotation_averaging::RelativeRotations relatives_with_priors = relatives_R;
+  IndexT world_pose_id = UndefinedIndexT;
+  size_t imu_prior_count = 0;
+  size_t imu_filtered_count = 0;
+  std::set<IndexT> imu_filtered_pose_ids;
+  if (imu_rotation_weight_ > 0.0 && !imu_pose_rotations_.empty())
+  {
+    IndexT max_pose_id = 0;
+    bool has_pose_id = false;
+    for (const auto & view : sfm_data_.GetViews())
+    {
+      const IndexT pose_id = view.second->id_pose;
+      if (pose_id != UndefinedIndexT)
+      {
+        has_pose_id = true;
+        max_pose_id = std::max(max_pose_id, pose_id);
+      }
+    }
+    if (has_pose_id)
+    {
+      world_pose_id = max_pose_id + 1;
+      for (const auto & imu_it : imu_pose_rotations_)
+      {
+        relatives_with_priors.emplace_back(
+          world_pose_id, imu_it.first, imu_it.second,
+          static_cast<float>(imu_rotation_weight_));
+        ++imu_prior_count;
+      }
+    }
+    else
+    {
+      OPENMVG_LOG_WARNING << "IMU rotation priors skipped: no valid pose IDs.";
+    }
+  }
 
-  OPENMVG_LOG_INFO
-    << "Found #global_rotations: " << global_rotations.size() << "\n"
-    << "Timing: " << t.elapsed() << " seconds";
+  GlobalSfM_Rotation_AveragingSolver rotation_averaging_solver;
+  auto run_rotation_averaging = [&](const rotation_averaging::RelativeRotations & rels) -> bool
+  {
+    system::Timer t;
+    const bool ok = rotation_averaging_solver.Run(
+      eRotation_averaging_method_, eRelativeRotationInferenceMethod,
+      rels, global_rotations, world_pose_id);
+
+    OPENMVG_LOG_INFO
+      << "Found #global_rotations: " << global_rotations.size() << "\n"
+      << "Timing: " << t.elapsed() << " seconds";
+    return ok;
+  };
+
+  bool b_rotation_averaging = run_rotation_averaging(relatives_with_priors);
+  if (b_rotation_averaging && imu_rotation_filter_outliers_ &&
+      imu_rotation_weight_ > 0.0 && !imu_pose_rotations_.empty() &&
+      imu_rotation_max_error_deg_ > 0.0)
+  {
+    std::vector<IndexT> outlier_pose_ids;
+    for (const auto & imu_it : imu_pose_rotations_)
+    {
+      const auto it = global_rotations.find(imu_it.first);
+      if (it == global_rotations.end())
+        continue;
+      const double err_deg = RotationAngularErrorDeg(it->second, imu_it.second);
+      if (err_deg > imu_rotation_max_error_deg_)
+        outlier_pose_ids.push_back(imu_it.first);
+    }
+
+    if (!outlier_pose_ids.empty())
+    {
+      imu_filtered_pose_ids.insert(outlier_pose_ids.begin(), outlier_pose_ids.end());
+      imu_filtered_count = outlier_pose_ids.size();
+      OPENMVG_LOG_WARNING << "IMU rotation prior filtering: removing "
+                          << outlier_pose_ids.size() << " / "
+                          << imu_pose_rotations_.size()
+                          << " priors with error > "
+                          << imu_rotation_max_error_deg_ << " deg.";
+
+      rotation_averaging::RelativeRotations filtered_rels = relatives_R;
+      for (const auto & imu_it : imu_pose_rotations_)
+      {
+        if (std::find(outlier_pose_ids.begin(), outlier_pose_ids.end(), imu_it.first) != outlier_pose_ids.end())
+          continue;
+        filtered_rels.emplace_back(
+          world_pose_id, imu_it.first, imu_it.second,
+          static_cast<float>(imu_rotation_weight_));
+      }
+      b_rotation_averaging = run_rotation_averaging(filtered_rels);
+      imu_prior_count = imu_pose_rotations_.size() - outlier_pose_ids.size();
+    }
+    else
+    {
+      OPENMVG_LOG_INFO << "IMU rotation prior filtering: removed 0 / "
+                       << imu_pose_rotations_.size()
+                       << " priors with error > "
+                       << imu_rotation_max_error_deg_ << " deg.";
+    }
+  }
+
+  if (b_rotation_averaging && !imu_pose_rotations_.empty())
+  {
+    OPENMVG_LOG_INFO
+      << "IMU rotation prior settings: weight=" << imu_rotation_weight_
+      << ", max_error_deg=" << imu_rotation_max_error_deg_
+      << ", filter_outliers=" << (imu_rotation_filter_outliers_ ? "true" : "false")
+      << ", filtered=" << imu_filtered_count;
+
+    std::vector<double> imu_errors_deg;
+    imu_errors_deg.reserve(imu_pose_rotations_.size());
+    size_t missing_global = 0;
+    std::vector<std::pair<Mat3, Mat3>> imu_pairs;
+    imu_pairs.reserve(imu_pose_rotations_.size());
+    for (const auto & imu_it : imu_pose_rotations_)
+    {
+      if (imu_filtered_pose_ids.count(imu_it.first) > 0)
+        continue;
+      const auto it = global_rotations.find(imu_it.first);
+      if (it == global_rotations.end())
+      {
+        ++missing_global;
+        continue;
+      }
+      const double err_deg = RotationAngularErrorDeg(it->second, imu_it.second);
+      imu_errors_deg.push_back(err_deg);
+      imu_pairs.emplace_back(it->second, imu_it.second);
+    }
+
+    if (!imu_errors_deg.empty())
+    {
+      const double bucket = std::max(1.0, imu_rotation_histogram_bucket_deg_);
+      const double max_err = *std::max_element(imu_errors_deg.cbegin(), imu_errors_deg.cend());
+      const size_t bucket_count = static_cast<size_t>(std::ceil(max_err / bucket)) + 1;
+      std::vector<size_t> buckets(bucket_count, 0);
+      for (const double err : imu_errors_deg)
+      {
+        const size_t idx = std::min(static_cast<size_t>(err / bucket), bucket_count - 1);
+        buckets[idx]++;
+      }
+
+      std::ostringstream os;
+      os << "\nIMU rotation prior errors (deg):\n";
+      minMaxMeanMedian<double>(imu_errors_deg.cbegin(), imu_errors_deg.cend(), os);
+      os << "Histogram (" << bucket << " deg buckets):\n";
+      for (size_t i = 0; i < buckets.size(); ++i)
+      {
+        const double start = i * bucket;
+        const double end = (i + 1) * bucket;
+        os << "  [" << start << "," << end << "): " << buckets[i] << "\n";
+      }
+      os << "IMU priors used: " << imu_prior_count
+         << " (missing global rotations: " << missing_global << ")\n";
+      OPENMVG_LOG_INFO << os.str();
+    }
+
+    if (imu_rotation_weight_ <= 0.0 && !imu_pairs.empty())
+    {
+      const Mat3 R_align = BestFitRotation(imu_pairs);
+      std::vector<double> aligned_errors_deg;
+      aligned_errors_deg.reserve(imu_pairs.size());
+      for (const auto & pair : imu_pairs)
+      {
+        const Mat3 R_aligned = R_align * pair.first;
+        aligned_errors_deg.push_back(RotationAngularErrorDeg(R_aligned, pair.second));
+      }
+
+      if (!aligned_errors_deg.empty())
+      {
+        const double bucket = std::max(1.0, imu_rotation_histogram_bucket_deg_);
+        const double max_err = *std::max_element(aligned_errors_deg.cbegin(), aligned_errors_deg.cend());
+        const size_t bucket_count = static_cast<size_t>(std::ceil(max_err / bucket)) + 1;
+        std::vector<size_t> buckets(bucket_count, 0);
+        for (const double err : aligned_errors_deg)
+        {
+          const size_t idx = std::min(static_cast<size_t>(err / bucket), bucket_count - 1);
+          buckets[idx]++;
+        }
+
+        std::ostringstream os;
+        os << "\nIMU rotation prior errors after best-fit alignment (deg):\n";
+        minMaxMeanMedian<double>(aligned_errors_deg.cbegin(), aligned_errors_deg.cend(), os);
+        os << "Histogram (" << bucket << " deg buckets):\n";
+        for (size_t i = 0; i < buckets.size(); ++i)
+        {
+          const double start = i * bucket;
+          const double end = (i + 1) * bucket;
+          os << "  [" << start << "," << end << "): " << buckets[i] << "\n";
+        }
+        OPENMVG_LOG_INFO << os.str();
+      }
+    }
+  }
 
 
   if (b_rotation_averaging)
@@ -594,6 +882,76 @@ void GlobalSfMReconstructionEngine_RelativeMotions::Compute_Relative_Rotations
     ++extract_progress;
   }
   OPENMVG_LOG_INFO << "Relative rotations extracted.";
+
+  if ((imu_rotation_weight_ > 0.0 || imu_rotation_histogram_bucket_deg_ > 0.0) && !imu_rotations_loaded_)
+  {
+    imu_pose_rotations_.clear();
+    const Mat3 R_cd = DeviceToCameraRotation();
+    const Mat3 R_landscape = DeviceLandscapeLeftRemap();
+
+    // Debug: print transformation matrices once
+    {
+      std::ostringstream os;
+      os << "\n=== IMU Debug: Transformation Matrices ===\n";
+      os << "R_cd (DeviceToCameraRotation - portrait):\n" << R_cd << "\n\n";
+      os << "R_landscape (DeviceLandscapeLeftRemap):\n" << R_landscape << "\n\n";
+      os << "R_cd * R_landscape (combined device-to-camera for landscape-left):\n" << (R_cd * R_landscape) << "\n";
+      OPENMVG_LOG_INFO << os.str();
+    }
+
+    size_t debug_count = 0;
+    for (const auto & view_it : sfm_data_.GetViews())
+    {
+      const IndexT pose_id = view_it.second->id_pose;
+      if (pose_id == UndefinedIndexT)
+        continue;
+
+      const std::string image_path =
+        stlplus::folder_append_separator(sfm_data_.s_root_path) + view_it.second->s_Img_path;
+      std::unique_ptr<openMVG::exif::Exif_IO> exifIO(
+        new openMVG::exif::Exif_IO_EasyExif(image_path));
+
+      std::string user_comment;
+      if (!exifIO->UserComment(&user_comment))
+        continue;
+
+      Mat3 R_dw;
+      if (!ParseImuRotationFromUserComment(user_comment, R_dw))
+        continue;
+
+      // R_dw: Device -> World (ENU). For landscape-left, we need:
+      // R_dc_landscape = R_dc_portrait * R_landscape
+      // R_wc = R_dc_landscape * R_dw^T = R_cd * R_landscape * R_dw^T
+      // (NOT: R_cd * (R_dw * R_landscape)^T, which incorrectly transposes R_landscape)
+      const Mat3 R_wc = R_cd * R_landscape * R_dw.transpose();
+      imu_pose_rotations_[pose_id] = R_wc;
+
+      // Debug: print first 3 IMU rotations
+      if (debug_count < 0)
+      {
+        std::ostringstream os;
+        os << "\n=== IMU Debug: View " << view_it.first << " (pose " << pose_id << ") ===\n";
+        os << "Image: " << view_it.second->s_Img_path << "\n";
+        os << "R_dw (Device->World from EXIF, row-major):\n" << R_dw << "\n\n";
+        os << "R_dw columns (device axes in world coords):\n";
+        os << "  Dev X in world: (" << R_dw(0,0) << ", " << R_dw(1,0) << ", " << R_dw(2,0) << ")\n";
+        os << "  Dev Y in world: (" << R_dw(0,1) << ", " << R_dw(1,1) << ", " << R_dw(2,1) << ")\n";
+        os << "  Dev Z in world: (" << R_dw(0,2) << ", " << R_dw(1,2) << ", " << R_dw(2,2) << ")\n";
+        os << "  Camera looks at -Dev Z: (" << -R_dw(0,2) << ", " << -R_dw(1,2) << ", " << -R_dw(2,2) << ")\n\n";
+        os << "R_wc (World->Camera, computed):\n" << R_wc << "\n\n";
+        os << "R_wc rows (camera axes in world coords):\n";
+        os << "  Cam X (right) in world: (" << R_wc(0,0) << ", " << R_wc(0,1) << ", " << R_wc(0,2) << ")\n";
+        os << "  Cam Y (down) in world: (" << R_wc(1,0) << ", " << R_wc(1,1) << ", " << R_wc(1,2) << ")\n";
+        os << "  Cam Z (forward) in world: (" << R_wc(2,0) << ", " << R_wc(2,1) << ", " << R_wc(2,2) << ")\n";
+        OPENMVG_LOG_INFO << os.str();
+        ++debug_count;
+      }
+    }
+    imu_rotations_loaded_ = true;
+    OPENMVG_LOG_INFO << "Loaded IMU rotation priors for "
+                     << imu_pose_rotations_.size() << " / "
+                     << sfm_data_.GetViews().size() << " views.";
+  }
 
   // Log input graph to the HTML report
   if (!sLogging_file_.empty() && !sOut_directory_.empty())

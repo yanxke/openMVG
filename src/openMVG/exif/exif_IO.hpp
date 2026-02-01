@@ -142,6 +142,12 @@ class Exif_IO
     */
     virtual bool GPSImageDirection(double * heading) const = 0;
 
+    /**
+    * @brief Try to read and save the EXIF UserComment
+    * @return If UserComment can be read & exported, return true
+    */
+    virtual bool UserComment(std::string * comment) const = 0;
+
 };
 
 } // namespace exif
