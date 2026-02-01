@@ -152,6 +152,12 @@ class Exif_IO_EasyExif : public Exif_IO
     */
     bool GPSImageDirection(double * heading) const override;
 
+    /**
+    * @brief Try to read and save the EXIF UserComment
+    * @return If UserComment can be read & exported, return true
+    */
+    bool UserComment(std::string * comment) const override;
+
 
   private:
 

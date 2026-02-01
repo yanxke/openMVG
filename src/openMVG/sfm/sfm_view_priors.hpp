@@ -68,6 +68,7 @@ struct ViewPriors : public View
     const double weight
   )
   {
+    b_use_pose_rotation_ = true;
     rotation_weight_ = weight;
     pose_rotation_   = rotation;
   }

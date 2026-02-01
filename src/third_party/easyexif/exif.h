@@ -101,6 +101,7 @@ class EXIFInfo {
   std::string SubSecTimeOriginal;   // Sub-second time that original picture was taken
   std::string Copyright;            // File copyright information
   std::string ImageUniqueID;        // Unique identifier assigned to the picture
+  std::string UserComment;          // EXIF UserComment
   double ExposureTime;              // Exposure time in seconds
   double FNumber;                   // F/stop
   unsigned short ExposureProgram;   // Exposure program
