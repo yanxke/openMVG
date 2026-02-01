@@ -33,6 +33,9 @@
 #include "openMVG/sfm/sfm_data.hpp"
 #include "openMVG/types.hpp"
 
+#include <atomic>
+#include <iostream>
+
 namespace openMVG {
 
 namespace sfm {
@@ -40,6 +43,47 @@ namespace sfm {
 }
 
 namespace matching_image_collection {
+
+/// Shared statistics for geometric filtering
+struct GeometricFilterStats {
+    std::atomic<size_t> total_pairs{0};
+    std::atomic<size_t> rejected_by_heading{0};
+    std::atomic<size_t> rejected_by_spot_check{0};
+    std::atomic<int> last_printed_percent{-1};
+    size_t total_expected{0};
+    double heading_threshold = 0.0;
+
+    void Print() const {
+        if (total_pairs == 0) return;
+        size_t h_rej = rejected_by_heading.load();
+        size_t s_rej = rejected_by_spot_check.load();
+        size_t processed = total_pairs.load();
+        int percent = (total_expected > 0) ? static_cast<int>(processed * 100 / total_expected) : 0;
+
+        OPENMVG_LOG_INFO << "\n--- Geometric Filter Pipeline Statistics [" << percent << "%] ---";
+        OPENMVG_LOG_INFO << "Total pairs processed:    " << processed << " / " << total_expected;
+        OPENMVG_LOG_INFO << "Rejected by Heading:      " << h_rej << " (" << (h_rej * 100.0 / processed) << "%) [Threshold: " << heading_threshold << " deg]";
+        OPENMVG_LOG_INFO << "Rejected by Spot Check:   " << s_rej << " (" << (s_rej * 100.0 / processed) << "%)";
+        OPENMVG_LOG_INFO << "Final RANSAC attempted:   " << (processed - h_rej - s_rej) << " (" << ((processed - h_rej - s_rej) * 100.0 / processed) << "%)";
+        OPENMVG_LOG_INFO << "------------------------------------------\n";
+    }
+
+    void PrintIfNewPercentage() {
+        if (total_expected == 0) return;
+        int percent = static_cast<int>(total_pairs.load() * 100 / total_expected);
+        int last_printed = last_printed_percent.load();
+        
+        // Calculate the current and last 5% milestone steps
+        int current_milestone = percent / 5;
+        int last_milestone = (last_printed < 0) ? -1 : last_printed / 5;
+
+        if (current_milestone > last_milestone) {
+            if (last_printed_percent.compare_exchange_weak(last_printed, percent)) {
+                Print();
+            }
+        }
+    }
+};
 
 /// Motion prior configuration for RANSAC-integrated prior scoring
 struct MotionPriorConfig {
@@ -61,6 +105,13 @@ struct MotionPriorConfig {
     // GPS headings for current pair (NaN if not available)
     double heading_i = std::numeric_limits<double>::quiet_NaN();
     double heading_j = std::numeric_limits<double>::quiet_NaN();
+
+    // Fast rejection parameters
+    double heading_max = 140.0;     // Max allowed yaw difference (degrees, 180 = disabled)
+    int    spot_sample_size = 15;  // Number of points to spot-check (0 = disabled)
+    int    spot_min_matches = 20;  // Min match count to trigger spot-check
+    double spot_dot_thresh  = 0.2; // Parallax orthogonality tolerance
+    double spot_min_ratio   = 0.6; // Required agreement ratio
 };
 
 
@@ -282,20 +333,38 @@ private:
 //   that satisfy motion constraints.
 struct GeometricFilter_EMatrix_AC_WithPriors
 {
+  // =========================================================================
+  // FAST REJECTION PARAMETERS (TUNE HERE)
+  // =========================================================================
+struct GeometricFilter_EMatrix_AC_WithPriors
+{
   GeometricFilter_EMatrix_AC_WithPriors
   (
     double dPrecision = std::numeric_limits<double>::infinity(),
     uint32_t iteration = 1024,
     const MotionPriorConfig & default_prior_config = MotionPriorConfig(),
-    const std::map<IndexT, double> * map_headings = nullptr
+    const std::map<IndexT, double> * map_headings = nullptr,
+    size_t total_expected = 0
   ):
     m_dPrecision(dPrecision),
     m_stIteration(iteration),
     m_E(Mat3::Identity()),
     m_dPrecision_robust(std::numeric_limits<double>::infinity()),
     m_default_prior_config(default_prior_config),
-    m_map_headings(map_headings)
+    m_map_headings(map_headings),
+    m_stats(std::make_shared<GeometricFilterStats>())
   {
+    m_stats->total_expected = total_expected;
+    m_stats->heading_threshold = m_default_prior_config.heading_max;
+  }
+
+  ~GeometricFilter_EMatrix_AC_WithPriors()
+  {
+    // Print stats only once (when the last shared copy is destroyed)
+    if (m_stats.use_count() == 1)
+    {
+      m_stats->Print();
+    }
   }
 
   /// Robust fitting of the ESSENTIAL matrix with motion priors integrated into RANSAC
@@ -309,6 +378,8 @@ struct GeometricFilter_EMatrix_AC_WithPriors
     matching::IndMatches & geometric_inliers)
   {
     geometric_inliers.clear();
+    m_stats->total_pairs++;
+    m_stats->PrintIfNewPercentage();
 
     // Get back corresponding view index
     const IndexT
@@ -342,13 +413,6 @@ struct GeometricFilter_EMatrix_AC_WithPriors
     }
 
     //--
-    // Get corresponding point regions arrays
-    //--
-
-    Mat2X xI,xJ;
-    MatchesPairToMat(pairIndex, vec_PutativeMatches, sfm_data, regions_provider, xI, xJ);
-
-    //--
     // Prepare prior config for this pair
     //--
     MotionPriorConfig pair_prior_config = m_default_prior_config;
@@ -363,6 +427,89 @@ struct GeometricFilter_EMatrix_AC_WithPriors
     }
 
     //--
+    // Fast Heading Check (Max Difference)
+    //--
+    if (pair_prior_config.heading_max < 180.0 &&
+        !std::isnan(pair_prior_config.heading_i) && !std::isnan(pair_prior_config.heading_j))
+    {
+      double diff = std::abs(pair_prior_config.heading_i - pair_prior_config.heading_j);
+      while (diff > 180.0) diff = 360.0 - diff;
+      if (diff > pair_prior_config.heading_max)
+      {
+        m_stats->rejected_by_heading++;
+        return false; // Skip pairs facing mostly opposite directions
+      }
+    }
+
+    //--
+    // Get corresponding point regions arrays
+    //--
+
+    Mat2X xI, xJ;
+    MatchesPairToMat(pairIndex, vec_PutativeMatches, sfm_data, regions_provider, xI, xJ);
+
+    const cameras::Pinhole_Intrinsic
+      * ptrPinhole_I = dynamic_cast<const cameras::Pinhole_Intrinsic*>(cam_I),
+      * ptrPinhole_J = dynamic_cast<const cameras::Pinhole_Intrinsic*>(cam_J);
+
+    //--
+    // Fast Rejection Spot-Check
+    //--
+    // If we have reasonably good priors, we can check if a small sample of matches
+    // is consistent with the prior rotation. If not, the pair probably doesn't overlap.
+    if (pair_prior_config.spot_sample_size > 0 &&
+        xI.cols() > (size_t)pair_prior_config.spot_min_matches && 
+        !std::isnan(pair_prior_config.heading_i))
+    {
+      // Assume R is roughly correct as per priors (Yaw only, level)
+      double expected_yaw = (pair_prior_config.heading_j - pair_prior_config.heading_i) * M_PI / 180.0;
+      Mat3 R_prior;
+      R_prior << std::cos(expected_yaw), 0, -std::sin(expected_yaw),
+                 0, 1, 0,
+                 std::sin(expected_yaw), 0, std::cos(expected_yaw);
+      
+      const Mat3 K1_inv = ptrPinhole_I->K().inverse();
+      const Mat3 K2_inv = ptrPinhole_J->K().inverse();
+
+      // Check coplanarity ofparallax vectors: v_k = x' x (R x)
+      // All v_k must be orthogonal to translation t.
+      std::vector<Vec3> vs;
+      const int sample_size = std::min<int>(pair_prior_config.spot_sample_size, (int)xI.cols());
+      vs.reserve(sample_size);
+      for (int k = 0; k < sample_size; ++k)
+      {
+        Vec3 p1 = K1_inv * Vec3(xI(0, k), xI(1, k), 1.0);
+        Vec3 p2 = K2_inv * Vec3(xJ(0, k), xJ(1, k), 1.0);
+        vs.push_back(p2.cross(R_prior * p1));
+      }
+
+      // 1-point test: assume t is cross product of pairs of vectors
+      bool plausible = false;
+      for (int i = 0; i < sample_size / 2 && !plausible; ++i)
+      {
+        for (int j = i + 1; j < sample_size / 2 + 1; ++j)
+        {
+          Vec3 t = vs[i].cross(vs[j]);
+          if (t.norm() < 1e-6) continue;
+          t.normalize();
+          
+          int inliers = 0;
+          for (const auto& v : vs)
+          {
+            if (std::abs(v.dot(t)) < pair_prior_config.spot_dot_thresh * v.norm()) inliers++;
+          }
+          if (inliers >= static_cast<int>(pair_prior_config.spot_min_ratio * sample_size)) { plausible = true; break; }
+        }
+      }
+
+      if (!plausible)
+      {
+        m_stats->rejected_by_spot_check++;
+        return false;
+      }
+    }
+
+    //--
     // Robust estimation using kernel with integrated priors
     //--
 
@@ -371,10 +518,6 @@ struct GeometricFilter_EMatrix_AC_WithPriors
         openMVG::essential::kernel::FivePointSolver,
         openMVG::fundamental::kernel::EpipolarDistanceError,
         Mat3>;
-
-    const cameras::Pinhole_Intrinsic
-      * ptrPinhole_I = dynamic_cast<const cameras::Pinhole_Intrinsic*>(cam_I),
-      * ptrPinhole_J = dynamic_cast<const cameras::Pinhole_Intrinsic*>(cam_J);
 
     KernelType kernel(
       xI, (*cam_I)(xI),
@@ -473,6 +616,7 @@ struct GeometricFilter_EMatrix_AC_WithPriors
   double m_dPrecision_robust;
   MotionPriorConfig m_default_prior_config;
   const std::map<IndexT, double> * m_map_headings;
+  std::shared_ptr<GeometricFilterStats> m_stats;
 };
 
 } //namespace matching_image_collection

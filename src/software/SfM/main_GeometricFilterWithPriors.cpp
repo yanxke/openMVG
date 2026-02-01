@@ -91,6 +91,8 @@ int main( int argc, char** argv )
   double roll_tol = 10.0;    // degrees
   double alt_tol = 0.2;      // translation ty
   double prior_weight = 1.0; // weight of prior penalty
+  double heading_max = 140.0; // max allowed heading difference
+  int    spot_sample_size = 15; // number of points to spot-check
 
   //required
   cmd.add( make_option( 'i', sSfM_Data_Filename, "input_file" ) );
@@ -110,6 +112,8 @@ int main( int argc, char** argv )
   cmd.add( make_option( 'z', roll_tol, "roll_tol" ) );
   cmd.add( make_option( 'a', alt_tol, "alt_tol" ) );
   cmd.add( make_option( 'w', prior_weight, "prior_weight" ) );
+  cmd.add( make_option( 'H', heading_max, "heading_max" ) );
+  cmd.add( make_option( 'S', spot_sample_size, "spot_sample_size" ) );
 
   try
   {
@@ -144,7 +148,9 @@ int main( int argc, char** argv )
                      << "[-x|--pitch_tol]        Pitch tolerance in degrees (default: 10.0)\n"
                      << "[-z|--roll_tol]         Roll tolerance in degrees (default: 10.0)\n"
                      << "[-a|--alt_tol]          Altitude (ty) tolerance (default: 0.2)\n"
-                     << "[-w|--prior_weight]     Weight of prior penalty in RANSAC (default: 1.0)";
+                     << "[-w|--prior_weight]     Weight of prior penalty in RANSAC (default: 1.0)\n"
+                     << "[-H|--heading_max]      Max allowed heading difference (default: 140.0, 180.0 to disable)\n"
+                     << "[-S|--spot_sample_size] Number of points to spot-check (default: 15, 0 to disable)";
 
     OPENMVG_LOG_INFO << s;
     return EXIT_FAILURE;
@@ -169,8 +175,10 @@ int main( int argc, char** argv )
                    << "--yaw_tol            " << yaw_tol << "\n"
                    << "--pitch_tol          " << pitch_tol << "\n"
                    << "--roll_tol           " << roll_tol << "\n"
-                   << "--alt_tol            " << alt_tol << "\n"
-                   << "--prior_weight       " << prior_weight;
+                    << "--alt_tol            " << alt_tol << "\n"
+                    << "--prior_weight       " << prior_weight << "\n"
+                    << "--heading_max        " << heading_max << "\n"
+                    << "--spot_sample_size   " << spot_sample_size;
 
   if ( sFilteredMatchesFilename.empty() )
   {
@@ -398,9 +406,11 @@ int main( int argc, char** argv )
         prior_config.yaw_tol = yaw_tol;
         prior_config.alt_tol = alt_tol;
         prior_config.prior_weight = prior_weight;
+        prior_config.heading_max = heading_max;
+        prior_config.spot_sample_size = spot_sample_size;
 
         filter_ptr->Robust_model_estimation(
-            GeometricFilter_EMatrix_AC_WithPriors( 4.0, imax_iteration, prior_config, &map_headings ),
+            GeometricFilter_EMatrix_AC_WithPriors( 4.0, imax_iteration, prior_config, &map_headings, map_PutativeMatches.size() ),
             map_PutativeMatches,
             bGuided_matching,
             d_distance_ratio,
