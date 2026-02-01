@@ -70,6 +70,7 @@ struct GeometricFilterStats {
 
     void PrintIfNewPercentage() {
         if (total_expected == 0) return;
+        if (rejected_by_heading.load() == 0 && rejected_by_spot_check.load() == 0) return;
         int percent = static_cast<int>(total_pairs.load() * 100 / total_expected);
         int last_printed = last_printed_percent.load();
         
@@ -336,8 +337,6 @@ struct GeometricFilter_EMatrix_AC_WithPriors
   // =========================================================================
   // FAST REJECTION PARAMETERS (TUNE HERE)
   // =========================================================================
-struct GeometricFilter_EMatrix_AC_WithPriors
-{
   GeometricFilter_EMatrix_AC_WithPriors
   (
     double dPrecision = std::numeric_limits<double>::infinity(),

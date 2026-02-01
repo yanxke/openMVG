@@ -121,10 +121,10 @@ with open(log_path, "a") as log_file:
             "-y", "25.0",  # Yaw tolerance (degrees)
             "-x", "20.0",  # Pitch tolerance (degrees)
             "-z", "20.0",  # Roll tolerance (degrees)
-            "-a", "0.5",   # Altitude (ty) tolerance
+            "-a", "0.4",   # Altitude (ty) tolerance
             "-w", "0.8",   # Reduced prior weight in RANSAC scoring
             "-I", "1024",  # Reduced iterations (default 2048)
-            "-H", "140.0", # Max heading diff (180.0 to disable)
+            "-H", "180.0", # Max heading diff (180.0 to disable)
             "-S", "0",    # Spot-check sample size (0 to disable)
             # "-c", "1000"   # Regions cache size (1000 images)
             ],
