@@ -46,7 +46,8 @@ public:
     ERotationAveragingMethod eRotationAveragingMethod,
     ERelativeRotationInferenceMethod eRelativeRotationInferenceMethod,
     const rotation_averaging::RelativeRotations & relativeRot_In,
-    Hash_Map<IndexT, Mat3> & map_globalR
+    Hash_Map<IndexT, Mat3> & map_globalR,
+    IndexT fixed_pose_id = UndefinedIndexT
   ) const;
 
   /// Reject edges of the view graph that do not produce triplets with tiny

@@ -225,5 +225,27 @@ bool Exif_IO_EasyExif::GPSAltitude(double * altitude) const
   return false;
 }
 
+
+bool Exif_IO_EasyExif::GPSImageDirection(double * heading) const
+{
+  if ((*pimpl_).get().GeoLocation.ImgDirection != std::numeric_limits<double>::infinity())
+  {
+    (*heading) = (*pimpl_).get().GeoLocation.ImgDirection;
+    return true;
+  }
+  return false;
+}
+
+bool Exif_IO_EasyExif::UserComment(std::string * comment) const
+{
+  const std::string & user_comment = (*pimpl_).get().UserComment;
+  if (!user_comment.empty())
+  {
+    (*comment) = user_comment;
+    return true;
+  }
+  return false;
+}
+
 } // namespace exif
 } // namespace openMVG

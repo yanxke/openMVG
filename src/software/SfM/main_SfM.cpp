@@ -270,6 +270,10 @@ int main(int argc, char **argv)
   // Global SfM
   int rotation_averaging_method = int (ROTATION_AVERAGING_L2);
   int translation_averaging_method = int (TRANSLATION_AVERAGING_SOFTL1);
+  double imu_rotation_weight = 0.0;
+  double imu_rotation_max_error = 45.0;
+  double imu_rotation_histogram_bucket = 10.0;
+  bool imu_rotation_filter_outliers = true;
 
 
   // Common options
@@ -296,6 +300,10 @@ int main(int argc, char **argv)
   // Global SfM
   cmd.add( make_option('R', rotation_averaging_method, "rotationAveraging") );
   cmd.add( make_option('T', translation_averaging_method, "translationAveraging") );
+  cmd.add( make_option('W', imu_rotation_weight, "imu_rotation_weight") );
+  cmd.add( make_option('U', imu_rotation_max_error, "imu_rotation_max_error") );
+  cmd.add( make_option('H', imu_rotation_histogram_bucket, "imu_rotation_histogram_bucket") );
+  cmd.add( make_option('q', imu_rotation_filter_outliers, "imu_rotation_filter_outliers") );
   // Stellar SfM
   std::string graph_simplification = "MST_X";
   int graph_simplification_value = 5;
@@ -396,6 +404,11 @@ int main(int argc, char **argv)
       << "\t\t 2 -> L2 minimization of sum of squared Chordal distances\n"
       << "\t\t 3 -> SoftL1 minimization (default)\n"
       << "\t\t 4 -> LiGT: Linear Global Translation constraints from rotation and matches\n"
+      << "\t[-W|--imu_rotation_weight] IMU rotation prior weight (0 disables)\n"
+      << "\t[-U|--imu_rotation_max_error] Max error (deg) for IMU prior filtering (default: " << imu_rotation_max_error << ")\n"
+      << "\t[-H|--imu_rotation_histogram_bucket] Histogram bucket size in degrees (default: " << imu_rotation_histogram_bucket << ")\n"
+      << "\t[-q|--imu_rotation_filter_outliers] Remove IMU priors above max error and rerun rotation averaging "
+      << "(default: " << (imu_rotation_filter_outliers ? "true" : "false") << ", set to 0 to disable)\n"
       << "[STELLAR]\n"
       << "\t[-G|--graph_simplification]\n"
       << "\t\t -> NONE\n"
@@ -413,6 +426,7 @@ int main(int argc, char **argv)
   OPENMVG_LOG_INFO << "Motion priors (-P) "
                    << (b_use_motion_priors ? "enabled" : "disabled")
                    << ".";
+
 
   // Check validity of command line parameters:
   if ( !isValid(static_cast<ETriangulationMethod>(triangulation_method))) {
@@ -669,6 +683,11 @@ int main(int argc, char **argv)
     // Configure motion averaging method
     engine->SetRotationAveragingMethod(ERotationAveragingMethod(rotation_averaging_method));
     engine->SetTranslationAveragingMethod(ETranslationAveragingMethod(translation_averaging_method));
+    engine->SetImuRotationPrior(
+      imu_rotation_weight,
+      imu_rotation_filter_outliers,
+      imu_rotation_max_error,
+      imu_rotation_histogram_bucket);
 
     sfm_engine.reset(engine);
   }

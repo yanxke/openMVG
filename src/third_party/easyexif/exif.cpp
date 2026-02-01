@@ -140,6 +140,10 @@ class IFEntry {
         delete val_byte_;
         val_byte_ = nullptr;
         break;
+      case 0x7:
+        delete val_byte_;
+        val_byte_ = nullptr;
+        break;
       case 0x2:
         delete val_string_;
         val_string_ = nullptr;
@@ -167,6 +171,9 @@ class IFEntry {
   void new_union() {
     switch (format_) {
       case 0x1:
+        val_byte_ = new byte_vector();
+        break;
+      case 0x7:
         val_byte_ = new byte_vector();
         break;
       case 0x2:
@@ -372,6 +379,11 @@ IFEntry parseIFEntry_temp(const unsigned char *buf, const unsigned offs,
       }
       break;
     case 7:
+      if (!extract_values<uint8_t, alignIntel>(result.val_byte(), buf, base,
+                                               len, result)) {
+        result.tag(0xFF);
+      }
+      break;
     case 9:
     case 10:
       break;
@@ -678,6 +690,30 @@ int easyexif::EXIFInfo::parseFromEXIFSegment(const unsigned char *buf,
             this->SubSecTimeOriginal = result.val_string();
           break;
 
+        case 0x9286:
+          // UserComment
+          if (result.format() == 2) {
+            this->UserComment = result.val_string();
+          } else if (result.format() == 7) {
+            const auto & bytes = result.val_byte();
+            if (!bytes.empty()) {
+              std::string tmp(bytes.begin(), bytes.end());
+              if (tmp.size() >= 8) {
+                if (tmp.compare(0, 8, "ASCII\0\0\0", 8) == 0 ||
+                    tmp.compare(0, 8, "UNICODE\0", 8) == 0 ||
+                    tmp.compare(0, 8, "JIS\0\0\0\0\0", 8) == 0) {
+                  tmp = tmp.substr(8);
+                }
+              }
+              // Trim trailing nulls/spaces.
+              while (!tmp.empty() && (tmp.back() == '\0' || tmp.back() == ' ')) {
+                tmp.pop_back();
+              }
+              this->UserComment = tmp;
+            }
+          }
+          break;
+
         case 0xa002:
           // EXIF Image width
           if (result.format() == 4 && result.val_long().size())
@@ -851,6 +887,14 @@ int easyexif::EXIFInfo::parseFromEXIFSegment(const unsigned char *buf,
                 buf + data + tiff_header_start, alignIntel);
           }
           break;
+
+        case 17:
+          // GPS image direction
+          if ((format == 5 || format == 10)) {
+            this->GeoLocation.ImgDirection = parse_value<Rational>(
+                buf + data + tiff_header_start, alignIntel);
+          }
+          break;
       }
       offs += 12;
     }
@@ -870,6 +914,7 @@ void easyexif::EXIFInfo::clear() {
   DateTimeDigitized = "";
   SubSecTimeOriginal = "";
   Copyright = "";
+  UserComment = "";
 
   // Shorts / unsigned / double
   ByteAlign = 0;
@@ -898,6 +943,7 @@ void easyexif::EXIFInfo::clear() {
   GeoLocation.Altitude = std::numeric_limits<double>::infinity();
   GeoLocation.AltitudeRef = 0;
   GeoLocation.DOP = std::numeric_limits<double>::infinity();
+  GeoLocation.ImgDirection = std::numeric_limits<double>::infinity();
   GeoLocation.LatComponents.degrees = std::numeric_limits<double>::infinity();
   GeoLocation.LatComponents.minutes = std::numeric_limits<double>::infinity();
   GeoLocation.LatComponents.seconds = std::numeric_limits<double>::infinity();

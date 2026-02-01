@@ -134,6 +134,32 @@ target_link_libraries(openMVG_main_GeometricFilter
     ${STLPLUS_LIBRARY}
 )
 
+add_executable(openMVG_main_GeometricFilterByPriors main_GeometricFilterByPriors.cpp)
+target_link_libraries(openMVG_main_GeometricFilterByPriors
+  PRIVATE
+    openMVG_graph
+    openMVG_features
+    openMVG_matching_image_collection
+    openMVG_multiview
+    openMVG_sfm
+    openMVG_system
+    openMVG_exif
+    ${STLPLUS_LIBRARY}
+)
+
+add_executable(openMVG_main_GeometricFilterWithPriors main_GeometricFilterWithPriors.cpp)
+target_link_libraries(openMVG_main_GeometricFilterWithPriors
+  PRIVATE
+    openMVG_graph
+    openMVG_features
+    openMVG_matching_image_collection
+    openMVG_multiview
+    openMVG_sfm
+    openMVG_system
+    openMVG_exif
+    ${STLPLUS_LIBRARY}
+)
+
 add_executable(openMVG_main_MatchesToTracks main_MatchesToTracks.cpp)
 target_link_libraries(openMVG_main_MatchesToTracks
   PRIVATE
@@ -151,6 +177,8 @@ set_property( TARGET openMVG_main_PairGenerator     PROPERTY FOLDER OpenMVG/soft
 set_property( TARGET openMVG_main_ComputeVLAD       PROPERTY FOLDER OpenMVG/software )
 set_property( TARGET openMVG_main_ComputeMatches    PROPERTY FOLDER OpenMVG/software )
 set_property( TARGET openMVG_main_GeometricFilter   PROPERTY FOLDER OpenMVG/software )
+set_property( TARGET openMVG_main_GeometricFilterByPriors PROPERTY FOLDER OpenMVG/software )
+set_property( TARGET openMVG_main_GeometricFilterWithPriors PROPERTY FOLDER OpenMVG/software )
 set_property( TARGET openMVG_main_MatchesToTracks   PROPERTY FOLDER OpenMVG/software )
 
 install( TARGETS openMVG_main_ListMatchingPairs DESTINATION bin/ )
@@ -159,6 +187,8 @@ install( TARGETS openMVG_main_PairGenerator     DESTINATION bin/ )
 install( TARGETS openMVG_main_ComputeVLAD       DESTINATION bin/ )
 install( TARGETS openMVG_main_ComputeMatches    DESTINATION bin/ )
 install( TARGETS openMVG_main_GeometricFilter   DESTINATION bin/ )
+install( TARGETS openMVG_main_GeometricFilterByPriors DESTINATION bin/ )
+install( TARGETS openMVG_main_GeometricFilterWithPriors DESTINATION bin/ )
 install( TARGETS openMVG_main_MatchesToTracks   DESTINATION bin/ )
 
 ###

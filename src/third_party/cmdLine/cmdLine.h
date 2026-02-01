@@ -28,6 +28,7 @@
 #include <iostream>
 #include <string>
 #include <sstream>
+#include <cctype>
 #include <cassert>
 
 #ifdef _WIN32
@@ -131,6 +132,25 @@ template <>
 inline bool OptionField<std::string>::read_param(const std::string& param) {
     _field = param;
     return true;
+}
+
+/// Template specialization to accept common boolean values.
+template <>
+inline bool OptionField<bool>::read_param(const std::string& param) {
+    std::string lower;
+    lower.reserve(param.size());
+    for(char ch : param)
+        lower.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
+    if(lower=="1" || lower=="true" || lower=="yes" || lower=="on") {
+        _field = true;
+        return true;
+    }
+    if(lower=="0" || lower=="false" || lower=="no" || lower=="off") {
+        _field = false;
+        return true;
+    }
+    std::stringstream str(param); char unused;
+    return !((str >> _field).fail() || !(str>>unused).fail());
 }
 
 /// New switch option

@@ -343,17 +343,18 @@ inline void FillMappingMatrix(
   sMat::Index i = 0, j = 0;
   for (size_t r=0; r<RelRs.size(); ++r) {
     const RelativeRotation& relR = RelRs[r];
+    const double w = relR.weight;
     if (relR.i != nMainViewID) {
       j = 3*(relR.i<nMainViewID ? relR.i : relR.i-1);
-      A.insert(i+0,j+0) = -1.0;
-      A.insert(i+1,j+1) = -1.0;
-      A.insert(i+2,j+2) = -1.0;
+      A.insert(i+0,j+0) = -w;
+      A.insert(i+1,j+1) = -w;
+      A.insert(i+2,j+2) = -w;
     }
     if (relR.j != nMainViewID) {
       j = 3*(relR.j<nMainViewID ? relR.j : relR.j-1);
-      A.insert(i+0,j+0) = 1.0;
-      A.insert(i+1,j+1) = 1.0;
-      A.insert(i+2,j+2) = 1.0;
+      A.insert(i+0,j+0) = w;
+      A.insert(i+1,j+1) = w;
+      A.insert(i+2,j+2) = w;
     }
     i+=3;
   }
@@ -374,7 +375,7 @@ inline void FillErrorMatrix(
     const Mat3 eRij(Rj.transpose()*Rij*Ri);
     const openMVG::Vec3 erij;
     ceres::RotationMatrixToAngleAxis((const double*)eRij.data(), (double*)erij.data());
-    b.block<3,1>(3*r,0) = erij;
+    b.block<3,1>(3*r,0) = erij * relR.weight;
   }
 }
 
