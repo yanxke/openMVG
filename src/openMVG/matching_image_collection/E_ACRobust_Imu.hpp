@@ -109,26 +109,40 @@ private:
 
 /**
  * @brief Geometric filter using IMU-guided 2-point essential matrix estimation
- * 
+ *
  * This filter uses IMU rotation data to dramatically accelerate essential matrix
- * estimation, reducing RANSAC from 5-point (~2000 iterations) to 2-point (~100 iterations).
+ * estimation, reducing RANSAC from 5-point (~2000 iterations) to 2-point (~64 iterations).
+ *
+ * ROTATION CONVENTION (verified against global rotation averaging):
+ * - R_wc represents camera orientation in world coordinates
+ * - Relative rotation: R_rel = R2_wc * R1_wc^T
+ * - This is consistent with global SfM which uses: error = Rj^T * Rij * Ri
  */
 struct GeometricFilter_EMatrix_AC_Imu
 {
   GeometricFilter_EMatrix_AC_Imu(
     double dPrecision = std::numeric_limits<double>::infinity(),
-    uint32_t iteration = 256,  // Much fewer iterations needed with 2-point
+    uint32_t iteration = 64,  // Reduced from 256: 2-point needs far fewer iterations
     const std::map<IndexT, Mat3> * imu_rotations = nullptr,
-    size_t total_expected = 0
+    size_t total_expected = 0,
+    double rotation_noise_deg = 25.0,  // Expected IMU rotation noise (degrees)
+    double max_elevation_ratio = 0.0,   // DISABLED: Max |t_y|/||t|| (0.0 = off, was 0.3 but too aggressive)
+    size_t min_inliers = 0
   ):
     m_dPrecision(dPrecision),
     m_stIteration(iteration),
     m_E(Mat3::Identity()),
     m_dPrecision_robust(std::numeric_limits<double>::infinity()),
     m_imu_rotations(imu_rotations),
+    m_rotation_noise_deg(rotation_noise_deg),
+    m_max_elevation_ratio(max_elevation_ratio),
+    m_min_inliers(min_inliers),
     m_stats(std::make_shared<GeometricFilterStats>())
   {
     m_stats->total_expected = total_expected;
+    m_stats->elevation_threshold = max_elevation_ratio;
+    m_stats->rotation_noise_threshold = rotation_noise_deg;
+    m_stats->min_inliers_threshold = min_inliers;
   }
 
   ~GeometricFilter_EMatrix_AC_Imu()
@@ -140,7 +154,7 @@ struct GeometricFilter_EMatrix_AC_Imu
     }
   }
 
-  /// Robust estimation of Essential matrix using 2-point IMU-guided RANSAC
+  /// Robust estimation of Essential matrix using 2-point IMU-guided RANSAC with pre-filtering
   template<typename Regions_or_Features_ProviderT>
   bool Robust_estimation(
     const sfm::SfM_Data * sfm_data,
@@ -203,16 +217,136 @@ struct GeometricFilter_EMatrix_AC_Imu
     Mat2X xI, xJ;
     MatchesPairToMat(pairIndex, vec_PutativeMatches, sfm_data, regions_provider, xI, xJ);
 
-    //-- Robust estimation using 2-point IMU kernel
+    //-- Pre-filter matches using known rotation (with noise tolerance)
+    // This dramatically reduces the number of matches RANSAC needs to evaluate
+    const Mat3 R_relative = R2_wc * R1_wc.transpose();
+    const Mat3X bearing_I = (*cam_I)(xI);
+    const Mat3X bearing_J = (*cam_J)(xJ);
+
+    // Compute epipolar constraint residuals for all matches
+    // For a correct match with known R: x2^T * [t]_x * R * x1 = 0
+    // This means: x2 x (R * x1) is parallel to t
+    // We check: ||x2 x (R * x1)|| / (||x2|| * ||R*x1||) < sin(noise_angle)
+    const double noise_threshold = std::sin(m_rotation_noise_deg * M_PI / 180.0);
+
+    std::vector<uint32_t> filtered_indices;
+    filtered_indices.reserve(xI.cols());
+    m_stats->total_features += xI.cols();
+
+    for (size_t i = 0; i < xI.cols(); ++i)
+    {
+      const Vec3 Rx1 = R_relative * bearing_I.col(i);
+      const Vec3 x2 = bearing_J.col(i);
+      const Vec3 cross_prod = x2.cross(Rx1);
+
+      // Normalized residual (should be near 0 for valid matches)
+      const double residual = cross_prod.norm() / (x2.norm() * Rx1.norm());
+
+      if (residual < noise_threshold)
+        filtered_indices.push_back(static_cast<uint32_t>(i));
+      else
+        m_stats->features_rejected_by_imu++;
+    }
+
+    // Early rejection if too few matches survive pre-filtering
+    const size_t min_filtered_matches = 10;
+    if (filtered_indices.size() < min_filtered_matches)
+    {
+      return false;  // IMU rotation inconsistent with putative matches
+    }
+
+    //-- Quick elevation check for flat-ground assumption
+    // For pedestrian walking on flat ground, translation should be mostly horizontal
+    // Camera Y-axis points down, so |t_y| should be small relative to ||t||
+    // This catches physically implausible pairs early before expensive RANSAC
+    const size_t elevation_check_samples = 5;  // Use 5 random samples for quick estimate
+    
+    if (m_max_elevation_ratio > 0.0 && filtered_indices.size() >= elevation_check_samples)
+    {
+      // Randomly sample a few filtered matches to estimate translation direction
+      std::vector<uint32_t> sample_indices;
+      sample_indices.reserve(elevation_check_samples);
+      const size_t step = filtered_indices.size() / elevation_check_samples;
+      for (size_t i = 0; i < elevation_check_samples && i * step < filtered_indices.size(); ++i)
+      {
+        sample_indices.push_back(filtered_indices[i * step]);
+      }
+      
+      // Use 2-point solver to get a quick translation estimate
+      if (sample_indices.size() >= 2)
+      {
+        Mat3X sample_bearing_I(3, sample_indices.size());
+        Mat3X sample_bearing_J(3, sample_indices.size());
+        
+        for (size_t k = 0; k < sample_indices.size(); ++k)
+        {
+          const size_t idx = sample_indices[k];
+          sample_bearing_I.col(k) = bearing_I.col(idx);
+          sample_bearing_J.col(k) = bearing_J.col(idx);
+        }
+        
+        // Solve for Essential matrix with first 2 samples
+        std::vector<Mat3> sample_models;
+        essential::kernel::TwoPointImuSolver::Solve(
+          sample_bearing_I.leftCols(2),
+          sample_bearing_J.leftCols(2),
+          R_relative,
+          &sample_models);
+        
+        if (!sample_models.empty())
+        {
+          // Extract translation from Essential matrix: E = [t]_x * R
+          // We can get t from the null space of E or by decomposition
+          // Quick approach: E = [t]_x * R, so E * R^T = [t]_x
+          const Mat3 t_skew = sample_models[0] * R_relative.transpose();
+          
+          // Extract t from skew-symmetric matrix [t]_x
+          // [t]_x = [ 0   -tz   ty ]
+          //         [ tz   0   -tx ]
+          //         [-ty   tx   0  ]
+          const Vec3 t(t_skew(2, 1), t_skew(0, 2), t_skew(1, 0));
+          const double t_norm = t.norm();
+          
+          if (t_norm > 1e-6)
+          {
+            const double elevation_ratio = std::abs(t(1)) / t_norm;  // |t_y| / ||t||
+            
+            if (elevation_ratio > m_max_elevation_ratio)
+            {
+              // Translation is too vertical - not consistent with flat-ground walking
+              m_stats->rejected_by_elevation++;
+              return false;  // Reject pair early
+            }
+          }
+        }
+      }
+    }
+
+    // Extract filtered matches for RANSAC
+    Mat2X xI_filtered(2, filtered_indices.size());
+    Mat2X xJ_filtered(2, filtered_indices.size());
+    Mat3X bearing_I_filtered(3, filtered_indices.size());
+    Mat3X bearing_J_filtered(3, filtered_indices.size());
+
+    for (size_t k = 0; k < filtered_indices.size(); ++k)
+    {
+      const size_t idx = filtered_indices[k];
+      xI_filtered.col(k) = xI.col(idx);
+      xJ_filtered.col(k) = xJ.col(idx);
+      bearing_I_filtered.col(k) = bearing_I.col(idx);
+      bearing_J_filtered.col(k) = bearing_J.col(idx);
+    }
+
+    //-- Robust estimation using 2-point IMU kernel on filtered matches
     using KernelType =
       ACKernelAdaptorEssentialImu<
         openMVG::fundamental::kernel::EpipolarDistanceError,
         Mat3>;
 
     KernelType kernel(
-      xI, (*cam_I)(xI),
+      xI_filtered, bearing_I_filtered,
       sfm_data->GetViews().at(iIndex)->ui_width, sfm_data->GetViews().at(iIndex)->ui_height,
-      xJ, (*cam_J)(xJ),
+      xJ_filtered, bearing_J_filtered,
       sfm_data->GetViews().at(jIndex)->ui_width, sfm_data->GetViews().at(jIndex)->ui_height,
       ptrPinhole_I->K(), ptrPinhole_J->K(),
       R1_wc, R2_wc);
@@ -220,22 +354,27 @@ struct GeometricFilter_EMatrix_AC_Imu
     // Robustly estimate the Essential matrix with A Contrario RANSAC
     const double upper_bound_precision = Square(m_dPrecision);
     std::vector<uint32_t> vec_inliers;
+    m_stats->ransac_attempted++;
+
     const auto ACRansacOut =
       openMVG::robust::ACRANSAC(kernel, vec_inliers, m_stIteration, &m_E, upper_bound_precision);
 
-    if (vec_inliers.size() <= KernelType::MINIMUM_SAMPLES * 2.5)
+    if (vec_inliers.size() < std::max<size_t>(m_min_inliers, (size_t)(KernelType::MINIMUM_SAMPLES * 2.5)))
     {
+      if (vec_inliers.size() > 0)
+        m_stats->rejected_by_min_inliers++;
       vec_inliers.clear();
       return false;
     }
 
     m_dPrecision_robust = ACRansacOut.first;
 
-    // Update geometric_inliers
+    // Map filtered inliers back to original putative match indices
     geometric_inliers.reserve(vec_inliers.size());
-    for (const uint32_t & index : vec_inliers)
+    for (const uint32_t & filtered_idx : vec_inliers)
     {
-      geometric_inliers.push_back( vec_PutativeMatches[index] );
+      const uint32_t original_idx = filtered_indices[filtered_idx];
+      geometric_inliers.push_back( vec_PutativeMatches[original_idx] );
     }
     return true;
   }
@@ -295,6 +434,9 @@ struct GeometricFilter_EMatrix_AC_Imu
   Mat3 m_E;
   double m_dPrecision_robust;
   const std::map<IndexT, Mat3> * m_imu_rotations;
+  double m_rotation_noise_deg;  // Expected rotation noise in degrees
+  double m_max_elevation_ratio;  // Max |t_y|/||t|| for flat-ground assumption
+  size_t m_min_inliers;
   std::shared_ptr<GeometricFilterStats> m_stats;
 };
 
