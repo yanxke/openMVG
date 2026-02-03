@@ -78,7 +78,7 @@ struct GeometricFilterStats {
         if (heading_threshold > 0.0) {
             OPENMVG_LOG_INFO << "Rejected by Heading:      " << h_rej << " (" << (h_rej * 100.0 / processed) << "%) [Threshold: " << heading_threshold << " deg]";
         }
-        if (s_rej > 0 || (heading_threshold > 0.0)) {
+        if (s_rej > 0 || heading_threshold > 0.0 || rotation_noise_threshold > 0.0) {
             OPENMVG_LOG_INFO << "Rejected by Spot Check:   " << s_rej << " (" << (s_rej * 100.0 / processed) << "%)";
         }
         if (elevation_threshold > 0.0) {

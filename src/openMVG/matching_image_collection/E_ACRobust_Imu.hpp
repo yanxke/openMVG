@@ -252,6 +252,7 @@ struct GeometricFilter_EMatrix_AC_Imu
     const size_t min_filtered_matches = 10;
     if (filtered_indices.size() < min_filtered_matches)
     {
+      m_stats->rejected_by_spot_check++;
       return false;  // IMU rotation inconsistent with putative matches
     }
 
