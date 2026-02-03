@@ -454,11 +454,14 @@ int main( int argc, char** argv )
   //---------------------------------------
   // A. Load initial matches
   //---------------------------------------
+  OPENMVG_LOG_INFO << "Loading putative matches from: " << sPutativeMatchesFilename;
   if ( !Load( map_PutativeMatches, sPutativeMatchesFilename ) )
   {
     OPENMVG_LOG_ERROR << "Failed to load the initial matches file.";
     return EXIT_FAILURE;
   }
+  OPENMVG_LOG_INFO << "Loaded " << map_PutativeMatches.size() << " putative matching pairs.";
+
 
   if ( !sInputPairsFilename.empty() )
   {
@@ -470,7 +473,9 @@ int main( int argc, char** argv )
     // Filter matches with the given pairs
     OPENMVG_LOG_INFO << "Filtering matches with the given pairs.";
     map_PutativeMatches = getPairs( map_PutativeMatches, input_pairs );
+    OPENMVG_LOG_INFO << "Number of putative pairs after input-pair filtering: " << map_PutativeMatches.size();
   }
+
 
   //---------------------------------------
   // b. Geometric filtering of putative matches
