@@ -268,6 +268,61 @@ bool GlobalSfM_Translation_AveragingSolver::Translation_averaging(
         // Check if we have max distance constraints
         bool has_constraints = !sfm_data.max_translation_distance_.empty();
         
+        // Lambda to compute and print statistics
+        auto print_stats = [&](const std::vector<Vec3> & current_translations, double scale_factor, const std::string & label) {
+          std::vector<double> recon_distances;
+          std::vector<double> discrepancies; // actual / (limit * scale_factor)
+
+          for (const auto & constraint : sfm_data.max_translation_distance_)
+          {
+            const Pair & orig_id = constraint.first;
+            // Check if both poses are in the current problem
+            if (reindex_forward.count(orig_id.first) && reindex_forward.count(orig_id.second))
+            {
+              const IndexT i = reindex_forward.at(orig_id.first);
+              const IndexT j = reindex_forward.at(orig_id.second);
+              
+              const Mat3 & Ri = map_globalR.at(orig_id.first);
+              const Mat3 & Rj = map_globalR.at(orig_id.second);
+              
+              const Vec3 ci = -Ri.transpose() * current_translations[i];
+              const Vec3 cj = -Rj.transpose() * current_translations[j];
+              
+              double dist = (ci - cj).norm();
+              recon_distances.push_back(dist);
+              // Calculate discrepancy relative to the auto-scaled limit
+              discrepancies.push_back(dist / (constraint.second * scale_factor));
+            }
+          }
+
+          if (!recon_distances.empty())
+          {
+            std::sort(recon_distances.begin(), recon_distances.end());
+            std::sort(discrepancies.begin(), discrepancies.end());
+
+            double sum_dist = 0, sum_disc = 0;
+            for(double d : recon_distances) sum_dist += d;
+            for(double d : discrepancies) sum_disc += d;
+
+            OPENMVG_LOG_INFO << "\n--- " << label << " Translation Distance Statistics ---";
+            OPENMVG_LOG_INFO << "  Count:  " << recon_distances.size();
+            OPENMVG_LOG_INFO << "  Min:    " << recon_distances.front();
+            OPENMVG_LOG_INFO << "  Max:    " << recon_distances.back();
+            OPENMVG_LOG_INFO << "  Mean:   " << sum_dist / recon_distances.size();
+            OPENMVG_LOG_INFO << "  Median: " << recon_distances[recon_distances.size()/2];
+
+            OPENMVG_LOG_INFO << "\n--- " << label << " Constraint Discrepancy Statistics (Actual / (Limit * Multiplier)) ---";
+            OPENMVG_LOG_INFO << "  Min:    " << discrepancies.front();
+            OPENMVG_LOG_INFO << "  Max:    " << discrepancies.back();
+            OPENMVG_LOG_INFO << "  Mean:   " << sum_disc / discrepancies.size();
+            OPENMVG_LOG_INFO << "  Median: " << discrepancies[discrepancies.size()/2];
+            
+            int violations = 0;
+            for(double d : discrepancies) if (d > 1.001) violations++;
+            OPENMVG_LOG_INFO << "  Violations: " << violations << " / " << discrepancies.size();
+          }
+        };
+
         if (has_constraints)
         {
           OPENMVG_LOG_INFO << "--- Auto-Scaling Constraints Pass ---";
@@ -293,7 +348,12 @@ bool GlobalSfM_Translation_AveragingSolver::Translation_averaging(
               const IndexT i = reindex_forward.at(orig_id.first);
               const IndexT j = reindex_forward.at(orig_id.second);
               
-              double recon_dist = (vec_translations[i] - vec_translations[j]).norm();
+              const Mat3 & Ri = map_globalR.at(orig_id.first);
+              const Mat3 & Rj = map_globalR.at(orig_id.second);
+              const Vec3 ci = -Ri.transpose() * vec_translations[i];
+              const Vec3 cj = -Rj.transpose() * vec_translations[j];
+              
+              double recon_dist = (ci - cj).norm();
               sum_recon_dist += recon_dist;
               sum_user_limit += constraint.second;
               constrained_pair_count++;
@@ -314,6 +374,9 @@ bool GlobalSfM_Translation_AveragingSolver::Translation_averaging(
             final_scale_factor = scale_factor;
             OPENMVG_LOG_INFO << "  - Computed Scale Factor: " << final_scale_factor << " (Target: " << constraint_scale_multiplier << "x average)";
             
+            // Print statistics for the baseline pass
+            print_stats(vec_translations, final_scale_factor, "Baseline");
+
             // 3. Remap and scale the constraints
             Hash_Map<Pair, double> reindexed_constraints;
             for (const auto & constraint : sfm_data.max_translation_distance_)
@@ -363,48 +426,8 @@ bool GlobalSfM_Translation_AveragingSolver::Translation_averaging(
           sfm_data.poses[pose_id] = Pose3(Ri, -Ri.transpose() * t);
         }
 
-        // --- Summary Statistics ---
-        std::vector<double> recon_distances;
-        std::vector<double> discrepancies; // actual / limit
-
-        for (const auto & constraint : sfm_data.max_translation_distance_)
-        {
-          const Pair & p = constraint.first;
-          if (sfm_data.poses.count(p.first) && sfm_data.poses.count(p.second))
-          {
-            double dist = (sfm_data.poses.at(p.first).center() - sfm_data.poses.at(p.second).center()).norm();
-            recon_distances.push_back(dist);
-            // Calculate discrepancy relative to the auto-scaled limit
-            discrepancies.push_back(dist / (constraint.second * final_scale_factor));
-          }
-        }
-
-        if (!recon_distances.empty())
-        {
-          std::sort(recon_distances.begin(), recon_distances.end());
-          std::sort(discrepancies.begin(), discrepancies.end());
-
-          double sum_dist = 0, sum_disc = 0;
-          for(double d : recon_distances) sum_dist += d;
-          for(double d : discrepancies) sum_disc += d;
-
-          OPENMVG_LOG_INFO << "\n--- Translation Distance Statistics ---";
-          OPENMVG_LOG_INFO << "  Count:  " << recon_distances.size();
-          OPENMVG_LOG_INFO << "  Min:    " << recon_distances.front();
-          OPENMVG_LOG_INFO << "  Max:    " << recon_distances.back();
-          OPENMVG_LOG_INFO << "  Mean:   " << sum_dist / recon_distances.size();
-          OPENMVG_LOG_INFO << "  Median: " << recon_distances[recon_distances.size()/2];
-
-          OPENMVG_LOG_INFO << "\n--- Constraint Discrepancy Statistics (Actual / (Limit * Multiplier)) ---";
-          OPENMVG_LOG_INFO << "  Min:    " << discrepancies.front();
-          OPENMVG_LOG_INFO << "  Max:    " << discrepancies.back();
-          OPENMVG_LOG_INFO << "  Mean:   " << sum_disc / discrepancies.size();
-          OPENMVG_LOG_INFO << "  Median: " << discrepancies[discrepancies.size()/2];
-          
-          int violations = 0;
-          for(double d : discrepancies) if (d > 1.001) violations++;
-          OPENMVG_LOG_INFO << "  Violations: " << violations << " / " << discrepancies.size();
-        }
+        // Print final statistics
+        print_stats(vec_translations, final_scale_factor, "Final");
       }
       break;
 

@@ -112,9 +112,16 @@ struct MaxDistanceError
     T dz = t_j[2] - t_i[2];
     T dist = ceres::sqrt(dx*dx + dy*dy + dz*dz);
     
-    // One-sided penalty: only penalize if distance exceeds limit
-    // residual = weight * max(0, dist - max_distance)
-    residual[0] = (dist > T(max_distance_)) ? T(weight_) * (dist - T(max_distance_)) : T(0.0);
+    // Logistic hinge (Softplus) penalty:
+    // residual = weight * log(1 + exp(k * (dist - threshold))) / k
+    // This provides a smooth transition and applies a small penalty even below the threshold.
+    const double k = 5.0; // Steepness of the transition
+    T x = T(k) * (dist - T(max_distance_));
+    
+    // Numerically stable Softplus: log(1 + exp(x)) = max(0, x) + log(1 + exp(-|x|))
+    T softplus_x = (x > T(0.0) ? x : T(0.0)) + ceres::log(T(1.0) + ceres::exp(-ceres::abs(x)));
+    
+    residual[0] = T(weight_) * softplus_x / T(k);
     return true;
   }
 
