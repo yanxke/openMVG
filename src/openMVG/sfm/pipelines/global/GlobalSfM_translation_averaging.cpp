@@ -147,10 +147,20 @@ bool GlobalSfM_Translation_AveragingSolver::Translation_averaging(
     const std::set<IndexT> index = getIndexT(vec_relative_motion_);
 
     const size_t iNview = index.size();
-    OPENMVG_LOG_INFO << "\n-------------------------------" << "\n"
-      << " Global translations computation: " << "\n"
-      << "   - Ready to compute " << iNview << " global translations." << "\n"
-      << "     from #relative translations: " << vec_relative_motion_.size()*3;
+    OPENMVG_LOG_INFO << "\n-------------------------------";
+    OPENMVG_LOG_INFO << " Global translations computation:";
+    
+    // Log the solver method
+    std::string solver_name = "UNKNOWN";
+    switch (eTranslationAveragingMethod)
+    {
+      case TRANSLATION_AVERAGING_L1: solver_name = "L1 (Linear Programming)"; break;
+      case TRANSLATION_AVERAGING_SOFTL1: solver_name = "SOFTL1 (Ceres-based)"; break;
+      case TRANSLATION_AVERAGING_L2_DISTANCE_CHORDAL: solver_name = "L2 Distance Chordal"; break;
+    }
+    OPENMVG_LOG_INFO << "   - Method: " << solver_name;
+    OPENMVG_LOG_INFO << "   - Ready to compute " << iNview << " global translations.";
+    OPENMVG_LOG_INFO << "     from #relative translations: " << vec_relative_motion_.size()*3;
 
     if (iNview < 3)
     {

@@ -45,6 +45,7 @@ parser.add_argument("--no_imu_rotation_filter_outliers", dest="imu_rotation_filt
 parser.add_argument("-gp", "--geofilt_prec", type=float, default=0.0, help="Geometric filter precision (max pixel error). Use 0.0 for Auto (found by RANSAC math).")
 parser.add_argument("-mi", "--min_inliers", type=int, default=50, help="Minimum inlier count per pair.")
 parser.add_argument("-ri", "--ransac_iter", type=int, default=256, help="RANSAC iterations for geometric filter.")
+parser.add_argument("-ta", "--translationAveraging", type=int, default=3, help="Translation averaging method (1: L1, 2: L2 Chordal, 3: SOFTL1, 4: LiGT). Use 3 for speed limit constraints.")
 parser.set_defaults(imu_rotation_filter_outliers=True)
 parser.add_argument("input_dir", help="Input directory containing the images.")
 parser.add_argument("output_dir", help="Output directory where the project files will be saved.")
@@ -168,6 +169,7 @@ with open(log_path, "a") as log_file:
             "--match_file", actual_matches,
             "--output_dir", reconstruction_dir,
             "--rotationAveraging", "1",
+            "--translationAveraging", str(args.translationAveraging),
             "-P",
             "--imu_rotation_weight", str(args.imu_rotation_weight),
             "--imu_rotation_max_error", str(args.imu_rotation_max_error),

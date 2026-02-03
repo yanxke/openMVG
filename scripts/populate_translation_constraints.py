@@ -88,13 +88,14 @@ def parse_exif_datetime(exif_tags) -> Optional[float]:
     return None
 
 
-def extract_timestamps_from_images(sfm_data: dict, root_path: str) -> Dict[int, float]:
+def extract_timestamps_from_images(sfm_data: dict, root_path: str, image_dir: Optional[str] = None) -> Dict[int, float]:
     """
     Extract timestamps from images referenced in sfm_data.
     
     Args:
         sfm_data: Parsed sfm_data.json
-        root_path: Root path for images
+        root_path: Root path for images (from sfm_data)
+        image_dir: Manual override for image directory (host path)
         
     Returns:
         Dictionary mapping view_id -> timestamp (seconds since epoch)
@@ -103,6 +104,8 @@ def extract_timestamps_from_images(sfm_data: dict, root_path: str) -> Dict[int, 
     views = sfm_data.get('views', {})
     
     print(f"Extracting timestamps from {len(views)} views...")
+    if image_dir:
+        print(f"Image override directory: {image_dir}")
     
     for view_entry in views:
         if isinstance(view_entry, dict):
@@ -113,14 +116,32 @@ def extract_timestamps_from_images(sfm_data: dict, root_path: str) -> Dict[int, 
             # Handle different JSON structures
             continue
             
-        # Construct full image path
-        if local_path:
-            img_path = os.path.join(root_path, local_path, filename)
-        else:
-            img_path = os.path.join(root_path, filename)
+        # Try to find the image
+        img_path = None
+        
+        # 1. Try override directory if provided
+        if image_dir:
+            # Try directly in image_dir
+            candidate = os.path.join(image_dir, filename)
+            if os.path.exists(candidate):
+                img_path = candidate
+            else:
+                # Try with the last component of local_path (e.g. if local_path is /data/orig_images)
+                # but might be redundant if filename is unique.
+                # Many SfM pipelines use the basename of the filename.
+                candidate = os.path.join(image_dir, os.path.basename(filename))
+                if os.path.exists(candidate):
+                    img_path = candidate
+
+        # 2. Try original path calculated from sfm_data + root_path
+        if not img_path:
+            if local_path:
+                img_path = os.path.join(root_path, local_path, filename)
+            else:
+                img_path = os.path.join(root_path, filename)
             
-        if not os.path.exists(img_path):
-            print(f"  Warning: Image not found: {img_path}")
+        if not img_path or not os.path.exists(img_path):
+            print(f"  Warning: Image not found: {img_path if img_path else filename}")
             continue
             
         # Read EXIF
@@ -131,9 +152,9 @@ def extract_timestamps_from_images(sfm_data: dict, root_path: str) -> Dict[int, 
                 
                 if timestamp is not None:
                     timestamps[view_id] = timestamp
-                    print(f"  View {view_id}: {datetime.fromtimestamp(timestamp).isoformat()} ({filename})")
+                    print(f"  View {view_id}: {datetime.fromtimestamp(timestamp).isoformat()} ({os.path.basename(img_path)})")
                 else:
-                    print(f"  Warning: No timestamp found in EXIF for view {view_id}: {filename}")
+                    print(f"  Warning: No timestamp found in EXIF for view {view_id}: {os.path.basename(img_path)}")
         except Exception as e:
             print(f"  Error reading EXIF from {img_path}: {e}")
             
@@ -231,14 +252,9 @@ def main():
         description="Populate max translation distance constraints from EXIF timestamps"
     )
     parser.add_argument(
-        '--sfm_data',
+        '-p', '--project_dir',
         required=True,
-        help='Input sfm_data.json file'
-    )
-    parser.add_argument(
-        '--output',
-        required=True,
-        help='Output sfm_data.json file with constraints'
+        help='Project directory containing openmvg/matches/sfm_data.json and orig_images/'
     )
     parser.add_argument(
         '--max_velocity',
@@ -254,18 +270,38 @@ def main():
     )
     
     args = parser.parse_args()
+
+    # Define paths
+    sfm_data_path = os.path.join(args.project_dir, 'openmvg/matches/sfm_data.json')
+    sfm_data_orig_path = sfm_data_path + '.orig'
+    image_dir = os.path.join(args.project_dir, 'orig_images')
+
+    # Backup and File Choice Logic
+    if not os.path.exists(sfm_data_path):
+        print(f"ERROR: Base sfm_data.json not found at {sfm_data_path}")
+        return 1
+
+    if not os.path.exists(sfm_data_orig_path):
+        import shutil
+        print(f"Creating backup: {sfm_data_path} -> {sfm_data_orig_path}")
+        shutil.copy2(sfm_data_path, sfm_data_orig_path)
+        input_path = sfm_data_orig_path
+    else:
+        print(f"Backup already exists. Reading source from: {sfm_data_orig_path}")
+        input_path = sfm_data_orig_path
+
+    print(f"Reading SfM data: {input_path}")
+    print(f"Writing result to: {sfm_data_path}")
     
     # Load sfm_data
-    print(f"Loading {args.sfm_data}...")
-    with open(args.sfm_data, 'r') as f:
+    with open(input_path, 'r') as f:
         sfm_data = json.load(f)
     
-    # Get root path
-    root_path = sfm_data.get('root_path', os.path.dirname(args.sfm_data))
-    print(f"Root path: {root_path}")
+    # Get root path from sfm_data (fallback for internal lookups)
+    root_path = sfm_data.get('root_path', os.path.dirname(input_path))
     
     # Extract timestamps
-    timestamps = extract_timestamps_from_images(sfm_data, root_path)
+    timestamps = extract_timestamps_from_images(sfm_data, root_path, image_dir)
     
     if not timestamps:
         print("ERROR: No timestamps found in EXIF data!")
@@ -281,11 +317,11 @@ def main():
     # Add to sfm_data
     sfm_data = add_constraints_to_sfm_data(sfm_data, constraints)
     
-    # Save output
-    print(f"\nSaving to {args.output}...")
-    with open(args.output, 'w') as f:
+    # Save output (always overwrite the main file)
+    with open(sfm_data_path, 'w') as f:
         json.dump(sfm_data, f, indent=2)
     
+    print(f"Successfully updated {sfm_data_path} with translation constraints.")
     print("Done!")
     return 0
 
