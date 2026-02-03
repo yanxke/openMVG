@@ -247,11 +247,49 @@ bool GlobalSfM_Translation_AveragingSolver::Translation_averaging(
       case TRANSLATION_AVERAGING_SOFTL1:
       {
         std::vector<Vec3> vec_translations;
-        if (!solve_translations_problem_softl1(
-          vec_relative_motion_cpy, vec_translations))
+        
+        // Check if we have max distance constraints
+        bool has_constraints = !sfm_data.max_translation_distance_.empty();
+        
+        if (has_constraints)
         {
-          OPENMVG_LOG_ERROR << "Compute global translations: TRANSLATION_AVERAGING_SOFTL1 failed";
-          return false;
+          // Remap the constraints from original pose IDs to reindexed pose IDs
+          Hash_Map<Pair, double> reindexed_constraints;
+          for (const auto & constraint : sfm_data.max_translation_distance_)
+          {
+            const Pair & orig_pair = constraint.first;
+            const double max_dist = constraint.second;
+            
+            // Check if both poses are in the reindex maps
+            if (reindex_forward.count(orig_pair.first) && 
+                reindex_forward.count(orig_pair.second))
+            {
+              const IndexT new_i = reindex_forward.at(orig_pair.first);
+              const IndexT new_j = reindex_forward.at(orig_pair.second);
+              reindexed_constraints[Pair(new_i, new_j)] = max_dist;
+            }
+          }
+          
+          OPENMVG_LOG_INFO << "Using SOFTL1 solver with " << reindexed_constraints.size()
+                           << " max distance constraints.";
+          
+          // Use solver with constraints (weight=10.0 by default)
+          if (!solve_translations_problem_softl1_with_constraints(
+                vec_relative_motion_cpy, reindexed_constraints, vec_translations, 10.0))
+          {
+            OPENMVG_LOG_ERROR << "Compute global translations: TRANSLATION_AVERAGING_SOFTL1 with constraints failed";
+            return false;
+          }
+        }
+        else
+        {
+          // Use standard solver without constraints
+          if (!solve_translations_problem_softl1(
+                vec_relative_motion_cpy, vec_translations))
+          {
+            OPENMVG_LOG_ERROR << "Compute global translations: TRANSLATION_AVERAGING_SOFTL1 failed";
+            return false;
+          }
         }
 
         // A valid solution was found:

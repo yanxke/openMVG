@@ -48,6 +48,12 @@ struct SfM_Data
   /// Root Views path
   std::string s_root_path;
 
+  /// Maximum translation distance constraints between view pairs
+  /// Used during translation averaging to enforce motion constraints (e.g., speed limits)
+  /// Maps (view_i, view_j) -> max_distance_meters
+  /// If a pair is not in this map, no distance constraint is applied
+  Hash_Map<Pair, double> max_translation_distance_;
+
   //--
   // Accessors
   //--
