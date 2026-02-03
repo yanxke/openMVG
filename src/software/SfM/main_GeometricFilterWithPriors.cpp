@@ -406,6 +406,12 @@ int main( int argc, char** argv )
       map_imu_rotations[view_ptr.first] = R_wc;
     }
     OPENMVG_LOG_INFO << "Loaded IMU rotations for " << map_imu_rotations.size() << " / " << sfm_data.GetViews().size() << " images.";
+    if (map_imu_rotations.empty())
+    {
+      OPENMVG_LOG_ERROR << "No IMU rotations were loaded from EXIF UserComment (Rotation tag). "
+                        << "Aborting as geometric filtering will fail for all pairs.";
+      return EXIT_FAILURE;
+    }
   }
 
   //---------------------------------------
