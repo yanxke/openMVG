@@ -44,7 +44,7 @@ parser.add_argument("--no_imu_rotation_filter_outliers", dest="imu_rotation_filt
                     help="Disable IMU prior outlier filtering.")
 parser.add_argument("-gp", "--geofilt_prec", type=float, default=0.0, help="Geometric filter precision (max pixel error). Use 0.0 for Auto (found by RANSAC math).")
 parser.add_argument("-mi", "--min_inliers", type=int, default=50, help="Minimum inlier count per pair.")
-parser.add_argument("-ri", "--ransac_iter", type=int, default=256, help="RANSAC iterations for geometric filter.")
+parser.add_argument("-ri", "--ransac_iter", type=int, default=512, help="RANSAC iterations for geometric filter.")
 parser.set_defaults(imu_rotation_filter_outliers=True)
 parser.add_argument("input_dir", help="Input directory containing the images.")
 parser.add_argument("output_dir", help="Output directory where the project files will be saved.")
@@ -133,7 +133,7 @@ with open(log_path, "a") as log_file:
             "-g", "i",     # IMU-guided 2-point solver (was "e" for GPS heading-based)
             "-o", matches_dir+"/matches.e.bin",
             "-I", str(args.ransac_iter),    # Iterations
-            "-t", "32.0",   # RANSAC search limit (fixed bound)
+            "-t", "50.0",   # RANSAC search limit (fixed bound)
             "-M", str(args.min_inliers),    # Min inlier count per pair
             "-T", str(args.geofilt_prec), # User-defined filter precision (0.0=Auto)
             # "-c", "1000"   # Optional: Regions cache size (1000 images)
