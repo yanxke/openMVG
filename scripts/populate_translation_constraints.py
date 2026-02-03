@@ -50,39 +50,42 @@ def parse_exif_datetime(exif_tags) -> Optional[float]:
     Returns:
         Timestamp in seconds since epoch (with millisecond precision), or None if not found
     """
-    # Try different EXIF fields in order of preference
-    datetime_fields = [
+    # Standard EXIF tag names for datetime and their corresponding sub-second tags
+    datetime_pairs = [
         ('EXIF DateTimeOriginal', 'EXIF SubSecTimeOriginal'),
         ('EXIF DateTimeDigitized', 'EXIF SubSecTimeDigitized'),
+        ('Image DateTime', 'EXIF SubSecTime'), # Sometimes it's here
         ('Image DateTime', 'Image SubSecTime'),
     ]
     
-    for dt_field, subsec_field in datetime_fields:
-        if dt_field in exif_tags:
-            # Parse main datetime
-            dt_str = str(exif_tags[dt_field])
+    for dt_tag, ss_tag in datetime_pairs:
+        if dt_tag in exif_tags:
+            dt_str = str(exif_tags[dt_tag])
             try:
                 # Format: "YYYY:MM:DD HH:MM:SS"
                 dt = datetime.strptime(dt_str, '%Y:%m:%d %H:%M:%S')
                 
-                # Add milliseconds if available
-                milliseconds = 0
-                if subsec_field in exif_tags:
-                    subsec_str = str(exif_tags[subsec_field])
-                    try:
-                        # SubSec is usually a fraction like "123" meaning 0.123 seconds
-                        # Pad or truncate to 3 digits for milliseconds
-                        subsec_str = subsec_str.ljust(3, '0')[:3]
-                        milliseconds = int(subsec_str)
-                    except ValueError:
-                        pass
+                # Default to 0 milliseconds
+                ms = 0.0
                 
-                # Convert to timestamp
-                timestamp = dt.timestamp() + milliseconds / 1000.0
-                return timestamp
+                # Check for sub-seconds
+                # Try the preferred pair first
+                if ss_tag in exif_tags:
+                    ss_val = str(exif_tags[ss_tag]).strip()
+                    if ss_val:
+                        ms = float("0." + ss_val)
+                else:
+                    # Fallback: Search for ANY tag containing 'SubSec'
+                    for key in exif_tags.keys():
+                        if 'SubSec' in key and ss_tag.split()[-1] in key:
+                             ss_val = str(exif_tags[key]).strip()
+                             if ss_val and ss_val.isdigit():
+                                 ms = float("0." + ss_val)
+                                 break
                 
-            except ValueError as e:
-                print(f"  Warning: Could not parse datetime '{dt_str}': {e}")
+                return dt.timestamp() + ms
+                
+            except (ValueError, ZeroDivisionError):
                 continue
     
     return None
@@ -147,12 +150,13 @@ def extract_timestamps_from_images(sfm_data: dict, root_path: str, image_dir: Op
         # Read EXIF
         try:
             with open(img_path, 'rb') as f:
-                tags = exifread.process_file(f, details=False, stop_tag='DateTimeOriginal')
+                tags = exifread.process_file(f, details=False)
                 timestamp = parse_exif_datetime(tags)
                 
                 if timestamp is not None:
                     timestamps[view_id] = timestamp
-                    print(f"  View {view_id}: {datetime.fromtimestamp(timestamp).isoformat()} ({os.path.basename(img_path)})")
+                    dt = datetime.fromtimestamp(timestamp)
+                    print(f"  View {view_id}: {dt.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3]} ({os.path.basename(img_path)})")
                 else:
                     print(f"  Warning: No timestamp found in EXIF for view {view_id}: {os.path.basename(img_path)}")
         except Exception as e:
