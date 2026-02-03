@@ -235,6 +235,7 @@ bool GlobalSfMReconstructionEngine_RelativeMotions::Process() {
     KeepOnlyReferencedElement(set_remainingIds, matches_provider_->pairWise_matches_);
   }
 
+  OPENMVG_LOG_INFO << "Starting relative motion estimation (solving for R and t per view pair)...";
   openMVG::rotation_averaging::RelativeRotations relatives_R;
   Compute_Relative_Rotations(relatives_R);
 

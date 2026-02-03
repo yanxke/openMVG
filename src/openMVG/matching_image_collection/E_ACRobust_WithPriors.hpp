@@ -49,27 +49,33 @@ struct GeometricFilterStats {
     std::atomic<size_t> total_pairs{0};
     std::atomic<size_t> rejected_by_heading{0};
     std::atomic<size_t> rejected_by_spot_check{0};
-    std::atomic<size_t> rejected_by_elevation{0};
     std::atomic<size_t> rejected_by_min_inliers{0};
     std::atomic<size_t> ransac_attempted{0};
     std::atomic<size_t> total_features{0};
-    std::atomic<size_t> features_rejected_by_imu{0};
+    std::atomic<size_t> ransac_inliers_total{0};
+    std::atomic<size_t> matches_recovered{0};
     std::atomic<int> last_printed_percent{-1};
+    // For auto-threshold tracking
+    mutable std::mutex precision_mutex;
+    double total_precision_accum{0.0};
+    std::atomic<size_t> precision_count{0};
+
+    // For Stage 1 inlier ratio
+    std::atomic<size_t> putative_matches_total{0};
+    std::atomic<size_t> stage1_matches_total{0};
+    std::atomic<size_t> successful_pairs_count{0};
+
     size_t total_expected{0};
     double heading_threshold = 0.0;
-    double elevation_threshold = 0.0;
-    double rotation_noise_threshold = 0.0;
     size_t min_inliers_threshold = 0;
 
     void Print() const {
         if (total_pairs == 0) return;
         size_t h_rej = rejected_by_heading.load();
         size_t s_rej = rejected_by_spot_check.load();
-        size_t e_rej = rejected_by_elevation.load();
         size_t m_rej = rejected_by_min_inliers.load();
         size_t r_att = ransac_attempted.load();
         size_t f_tot = total_features.load();
-        size_t f_rej = features_rejected_by_imu.load();
         size_t processed = total_pairs.load();
         int percent = (total_expected > 0) ? static_cast<int>(processed * 100 / total_expected) : 0;
 
@@ -78,25 +84,44 @@ struct GeometricFilterStats {
         if (heading_threshold > 0.0) {
             OPENMVG_LOG_INFO << "Rejected by Heading:      " << h_rej << " (" << (h_rej * 100.0 / processed) << "%) [Threshold: " << heading_threshold << " deg]";
         }
-        if (s_rej > 0 || heading_threshold > 0.0 || rotation_noise_threshold > 0.0) {
+        if (s_rej > 0 || heading_threshold > 0.0) {
             OPENMVG_LOG_INFO << "Rejected by Spot Check:   " << s_rej << " (" << (s_rej * 100.0 / processed) << "%)";
-        }
-        if (elevation_threshold > 0.0) {
-            OPENMVG_LOG_INFO << "Rejected by Elevation:    " << e_rej << " (" << (e_rej * 100.0 / processed) << "%) [Max ratio: " << elevation_threshold << "]";
         }
         if (min_inliers_threshold > 0) {
             OPENMVG_LOG_INFO << "Rejected by Min Inliers:  " << m_rej << " (" << (m_rej * 100.0 / processed) << "%) [Min count: " << min_inliers_threshold << "]";
         }
-        if (rotation_noise_threshold > 0.0) {
-            OPENMVG_LOG_INFO << "Features Filtered (IMU):  " << f_rej << " / " << f_tot << " (" << (f_tot > 0 ? f_rej * 100.0 / f_tot : 0.0) << "%) [Noise tol: " << rotation_noise_threshold << " deg]";
-        }
-        OPENMVG_LOG_INFO << "RANSAC attempted:         " << r_att << " (" << (r_att * 100.0 / processed) << "%)";
+        OPENMVG_LOG_INFO << "RANSAC attempted:         " << r_att << " (" << (processed > 0 ? (r_att * 100.0 / processed) : 0.0) << "%)";
+            size_t succ_pairs = successful_pairs_count.load();
+            if (succ_pairs > 0) {
+                size_t p_tot = putative_matches_total.load();
+                size_t s1_tot = stage1_matches_total.load();
+                size_t r_inl = ransac_inliers_total.load();
+                size_t f_tot = matches_recovered.load(); // m_rec now stores FINAL (Stage 3)
+
+                OPENMVG_LOG_INFO << "Geometric verification success (averages per SUCCESSFUL pair):";
+                OPENMVG_LOG_INFO << "  Putative matches:          " << (static_cast<double>(p_tot) / succ_pairs);
+                OPENMVG_LOG_INFO << "  Stage 1 (IMU filter) ratio: " << (p_tot > 0 ? (s1_tot * 100.0 / p_tot) : 0.0) << "%";
+                OPENMVG_LOG_INFO << "  RANSAC Stage 1 inliers:    " << (static_cast<double>(r_inl) / succ_pairs);
+                OPENMVG_LOG_INFO << "  Avg RANSAC Inlier ratio:   " << (s1_tot > 0 ? (r_inl * 100.0 / s1_tot) : 0.0) << "%";
+                OPENMVG_LOG_INFO << "  Final matches:             " << (static_cast<double>(f_tot) / succ_pairs);
+                
+                {
+                    std::lock_guard<std::mutex> lock(precision_mutex);
+                    if (precision_count > 0) {
+                        OPENMVG_LOG_INFO << "  Avg Auto Precision found:  " << std::sqrt(total_precision_accum / precision_count) << " px";
+                    }
+                }
+
+                OPENMVG_LOG_INFO << "Geometric verification totals (across " << succ_pairs << " pairs):";
+                OPENMVG_LOG_INFO << "  Total RANSAC Inliers: " << r_inl;
+                OPENMVG_LOG_INFO << "  Total FINAL Matches:  " << f_tot;
+            }
         OPENMVG_LOG_INFO << "------------------------------------------\n";
     }
 
     void PrintIfNewPercentage() {
         if (total_expected == 0) return;
-        if (rejected_by_heading.load() == 0 && rejected_by_spot_check.load() == 0 && rejected_by_elevation.load() == 0) return;
+        if (rejected_by_heading.load() == 0 && rejected_by_spot_check.load() == 0) return;
         int percent = static_cast<int>(total_pairs.load() * 100 / total_expected);
         int last_printed = last_printed_percent.load();
         

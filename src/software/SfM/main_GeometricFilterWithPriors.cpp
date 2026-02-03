@@ -156,9 +156,9 @@ int main( int argc, char** argv )
   double prior_weight = 1.0; // weight of prior penalty
   double heading_max = 140.0; // max allowed heading difference
   int    spot_sample_size = 15; // number of points to spot-check
-  double rotation_noise = 25.0; // IMU rotation noise tolerance (degrees)
   int    min_inliers = 0;       // min inlier count per pair
-  double dPrecision = 4.0;      // max pixel error
+  double dPrecision = 32.0;     // max pixel error (Stage 1 RANSAC)
+  double dRecoveryPrecision = 4.0; // max pixel error (Stage 3 Recovery)
 
   //required
   cmd.add( make_option( 'i', sSfM_Data_Filename, "input_file" ) );
@@ -180,9 +180,9 @@ int main( int argc, char** argv )
   cmd.add( make_option( 'w', prior_weight, "prior_weight" ) );
   cmd.add( make_option( 'H', heading_max, "heading_max" ) );
   cmd.add( make_option( 'S', spot_sample_size, "spot_sample_size" ) );
-  cmd.add( make_option( 'N', rotation_noise, "rotation_noise" ) );
   cmd.add( make_option( 'M', min_inliers, "min_inliers" ) );
   cmd.add( make_option( 't', dPrecision, "precision" ) );
+  cmd.add( make_option( 'T', dRecoveryPrecision, "recovery_precision" ) );
 
   try
   {
@@ -221,9 +221,9 @@ int main( int argc, char** argv )
                      << "[-w|--prior_weight]     Weight of prior penalty in RANSAC (default: 1.0)\n"
                      << "[-H|--heading_max]      Max allowed heading difference (default: 140.0, 180.0 to disable)\n"
                      << "[-S|--spot_sample_size] Number of points to spot-check (default: 15, 0 to disable)\n"
-                     << "[-N|--rotation_noise]   IMU rotation noise tolerance in degrees (default: 25.0)\n"
                      << "[-M|--min_inliers]      Min inlier count to keep a pair (default: 0)\n"
-                     << "[-t|--precision]        Max pixel error for RANSAC (default: 4.0)";
+                     << "[-t|--precision]        Max pixel error for RANSAC (default: 4.0)\n"
+                     << "[-T|--recovery_precision] Max pixel error for recovery stage (default: 0.0 for Auto)";
 
     OPENMVG_LOG_INFO << s;
     return EXIT_FAILURE;
@@ -252,9 +252,9 @@ int main( int argc, char** argv )
                     << "--prior_weight       " << prior_weight << "\n"
                     << "--heading_max        " << heading_max << "\n"
                     << "--spot_sample_size   " << spot_sample_size << "\n"
-                    << "--rotation_noise     " << rotation_noise << "\n"
                     << "--min_inliers        " << min_inliers << "\n"
-                    << "--precision          " << dPrecision;
+                    << "--precision          " << dPrecision << "\n"
+                    << "--recovery_precision " << dRecoveryPrecision;
 
   if ( sFilteredMatchesFilename.empty() )
   {
@@ -541,7 +541,7 @@ int main( int argc, char** argv )
       case ESSENTIAL_MATRIX_IMU:
       {
         filter_ptr->Robust_model_estimation(
-            GeometricFilter_EMatrix_AC_Imu( dPrecision, imax_iteration, &map_imu_rotations, map_PutativeMatches.size(), rotation_noise, 0.0, (size_t)min_inliers ),
+            GeometricFilter_EMatrix_AC_Imu( dPrecision, imax_iteration, &map_imu_rotations, map_PutativeMatches.size(), (size_t)min_inliers, dRecoveryPrecision ),
             map_PutativeMatches,
             bGuided_matching,
             d_distance_ratio,
