@@ -219,6 +219,14 @@ void GlobalSfMReconstructionEngine_RelativeMotions::SetImuRotationPrior(
   imu_rotation_histogram_bucket_deg_ = histogram_bucket_deg;
 }
 
+void GlobalSfMReconstructionEngine_RelativeMotions::SetTranslationAveragingConstraints(
+  double scale_multiplier,
+  double weight)
+{
+  translation_averaging_constraint_scale_multiplier_ = scale_multiplier;
+  translation_averaging_constraint_weight_ = weight;
+}
+
 bool GlobalSfMReconstructionEngine_RelativeMotions::Process() {
 
   //-------------------
@@ -592,7 +600,9 @@ bool GlobalSfMReconstructionEngine_RelativeMotions::Compute_Global_Translations
     features_provider_,
     matches_provider_,
     global_rotations,
-    tripletWise_matches);
+    tripletWise_matches,
+    translation_averaging_constraint_scale_multiplier_,
+    translation_averaging_constraint_weight_);
 
   if (!sLogging_file_.empty())
   {

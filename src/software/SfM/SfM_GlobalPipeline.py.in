@@ -46,6 +46,8 @@ parser.add_argument("-gp", "--geofilt_prec", type=float, default=0.0, help="Geom
 parser.add_argument("-mi", "--min_inliers", type=int, default=50, help="Minimum inlier count per pair.")
 parser.add_argument("-ri", "--ransac_iter", type=int, default=256, help="RANSAC iterations for geometric filter.")
 parser.add_argument("-ta", "--translationAveraging", type=int, default=3, help="Translation averaging method (1: L1, 2: L2 Chordal, 3: SOFTL1, 4: LiGT). Use 3 for speed limit constraints.")
+parser.add_argument("-tam", "--translationAveragingMultiplier", type=float, default=5.0, help="Scaling factor for translation constraints (relative to average).")
+parser.add_argument("-taw", "--translationAveragingWeight", type=float, default=1.0, help="Weight for translation constraints.")
 parser.set_defaults(imu_rotation_filter_outliers=True)
 parser.add_argument("input_dir", help="Input directory containing the images.")
 parser.add_argument("output_dir", help="Output directory where the project files will be saved.")
@@ -174,7 +176,9 @@ with open(log_path, "a") as log_file:
             "--imu_rotation_weight", str(args.imu_rotation_weight),
             "--imu_rotation_max_error", str(args.imu_rotation_max_error),
             "--imu_rotation_histogram_bucket", str(args.imu_rotation_histogram_bucket),
-            "--imu_rotation_filter_outliers", "1" if args.imu_rotation_filter_outliers else "0"],
+            "--imu_rotation_filter_outliers", "1" if args.imu_rotation_filter_outliers else "0",
+            "--translationAveragingMultiplier", str(args.translationAveragingMultiplier),
+            "--translationAveragingWeight", str(args.translationAveragingWeight)],
            log_file)
 
   # run_step("7. Colorize Structure",

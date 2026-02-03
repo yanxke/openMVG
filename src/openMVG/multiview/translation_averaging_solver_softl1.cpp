@@ -155,6 +155,17 @@ bool solve_translations_problem_softl1
   // - relative rotations
 
   std::vector<double> vec_translations(nb_poses*3, 1.0);
+  // Warm start if translations are provided
+  if (translations.size() == nb_poses)
+  {
+    for (size_t i = 0; i < nb_poses; ++i)
+    {
+      vec_translations[i*3] = translations[i](0);
+      vec_translations[i*3+1] = translations[i](1);
+      vec_translations[i*3+2] = translations[i](2);
+    }
+  }
+
   const unsigned nb_scales = vec_relative_group_estimates.size();
   std::vector<double> vec_scales(nb_scales, 1.0);
 
@@ -218,6 +229,7 @@ bool solve_translations_problem_softl1
             new SmallScaleError(1.0));
 
     problem.AddResidualBlock(cost_function, nullptr, &vec_scales[i]);
+
   }
 
   // Set one center as known (to fix the gauge freedom)
@@ -303,6 +315,17 @@ bool solve_translations_problem_softl1_with_constraints
   // - relative rotations
 
   std::vector<double> vec_translations(nb_poses*3, 1.0);
+  // Warm start if translations are provided
+  if (translations.size() == nb_poses)
+  {
+    for (size_t i = 0; i < nb_poses; ++i)
+    {
+      vec_translations[i*3] = translations[i](0);
+      vec_translations[i*3+1] = translations[i](1);
+      vec_translations[i*3+2] = translations[i](2);
+    }
+  }
+
   const unsigned nb_scales = vec_relative_group_estimates.size();
   std::vector<double> vec_scales(nb_scales, 1.0);
 
@@ -366,6 +389,7 @@ bool solve_translations_problem_softl1_with_constraints
             new SmallScaleError(1.0));
 
     problem.AddResidualBlock(cost_function, nullptr, &vec_scales[i]);
+
   }
 
   // C. Add maximum distance constraints between specified camera pairs
