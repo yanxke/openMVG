@@ -70,6 +70,7 @@ log_path = os.path.join(output_dir, "SfM_GlobalPipeline.log")
 
 def run_step(title, cmd, log_file):
   print (title)
+  print ("Command: " + " ".join(cmd))
   log_file.write("== " + title + " ==\n")
   log_file.write("Command: " + " ".join(cmd) + "\n")
   log_file.flush()

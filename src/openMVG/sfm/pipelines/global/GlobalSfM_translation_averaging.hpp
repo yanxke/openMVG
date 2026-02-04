@@ -39,6 +39,7 @@ struct Features_Provider;
 class GlobalSfM_Translation_AveragingSolver
 {
   std::vector<RelativeInfo_Vec> vec_relative_motion_;
+  std::string output_dir_;
 
 public:
 
@@ -48,7 +49,8 @@ public:
     const openMVG::sfm::Features_Provider * features_provider,
     const openMVG::sfm::Matches_Provider * matches_provider,
     const Hash_Map<IndexT, Mat3> & map_globalR,
-    matching::PairWiseMatches & tripletWise_matches
+    matching::PairWiseMatches & tripletWise_matches,
+    const std::string & output_dir
   );
 
 private:
