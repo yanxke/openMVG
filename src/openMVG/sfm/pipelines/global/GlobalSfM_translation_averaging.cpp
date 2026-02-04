@@ -31,11 +31,14 @@
 #include "openMVG/stl/stl.hpp"
 #include "openMVG/system/loggerprogress.hpp"
 #include "openMVG/system/timer.hpp"
+#include "third_party/stlplus3/filesystemSimplified/file_system.hpp"
 
 #ifdef USE_PATENTED_LIGT
 #include "openMVG/multiview/LiGT/LiGT_algorithm_converter.hpp"
 #endif
 
+#include <fstream>
+#include <iomanip>
 #include <vector>
 
 namespace openMVG{
@@ -53,9 +56,12 @@ bool GlobalSfM_Translation_AveragingSolver::Run
   const openMVG::sfm::Features_Provider * features_provider,
   const openMVG::sfm::Matches_Provider * matches_provider,
   const Hash_Map<IndexT, Mat3> & map_globalR,
-  matching::PairWiseMatches & tripletWise_matches
+  matching::PairWiseMatches & tripletWise_matches,
+  const std::string & output_dir
 )
 {
+  output_dir_ = output_dir;
+
   // Compute the relative translations and save them to vec_initialRijTijEstimates:
   Compute_translations(
     sfm_data,
@@ -142,6 +148,30 @@ bool GlobalSfM_Translation_AveragingSolver::Translation_averaging(
   const std::set<IndexT> set_remainingIds =
     openMVG::graph::CleanGraph_KeepLargestBiEdge_Nodes<Pair_Set, IndexT>(pairs);
   KeepOnlyReferencedElement(set_remainingIds, vec_relative_motion_);
+
+  if (!output_dir_.empty())
+  {
+    const std::string csv_path = stlplus::create_filespec(output_dir_, "relative_translations_triplets", "csv");
+    OPENMVG_LOG_INFO << "Writing CSV: " << csv_path;
+    std::ofstream csv(csv_path.c_str());
+    if (csv)
+    {
+      csv << "group_id,view_i,view_j,t_x,t_y,t_z\n";
+      csv << std::fixed << std::setprecision(10);
+      for (size_t group_id = 0; group_id < vec_relative_motion_.size(); ++group_id)
+      {
+        const auto & group = vec_relative_motion_[group_id];
+        for (const relativeInfo & rel : group)
+        {
+          const Pair & ids = rel.first;
+          const Vec3 & tij = rel.second.second;
+          csv << group_id << ","
+              << ids.first << "," << ids.second << ","
+              << tij(0) << "," << tij(1) << "," << tij(2) << "\n";
+        }
+      }
+    }
+  }
 
   {
     const std::set<IndexT> index = getIndexT(vec_relative_motion_);
