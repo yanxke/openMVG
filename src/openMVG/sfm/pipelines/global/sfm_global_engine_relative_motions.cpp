@@ -40,7 +40,9 @@
 #include <Eigen/Dense>
 #include <algorithm>
 #include <cmath>
+#include <fstream>
 #include <iostream>
+#include <iomanip>
 #include <limits>
 #include <sstream>
 
@@ -137,6 +139,140 @@ openMVG::Mat3 BestFitRotation(const std::vector<std::pair<openMVG::Mat3, openMVG
   return R;
 }
 
+openMVG::Hash_Map<openMVG::IndexT, openMVG::IndexT>
+BuildPoseToViewMap(const openMVG::sfm::SfM_Data & sfm_data)
+{
+  openMVG::Hash_Map<openMVG::IndexT, openMVG::IndexT> map_pose_to_view;
+  for (const auto & view_it : sfm_data.GetViews())
+  {
+    const openMVG::sfm::View * view = view_it.second.get();
+    if (!view || view->id_pose == openMVG::UndefinedIndexT)
+      continue;
+    if (map_pose_to_view.count(view->id_pose) == 0)
+      map_pose_to_view[view->id_pose] = view->id_view;
+  }
+  return map_pose_to_view;
+}
+
+std::string ViewImagePath(const openMVG::sfm::SfM_Data & sfm_data, openMVG::IndexT view_id)
+{
+  const auto it = sfm_data.GetViews().find(view_id);
+  if (it == sfm_data.GetViews().end() || !it->second)
+    return std::string();
+  return it->second->s_Img_path;
+}
+
+void WriteRotationsCsv(const std::string & path,
+                       const openMVG::sfm::SfM_Data & sfm_data,
+                       const openMVG::Hash_Map<openMVG::IndexT, openMVG::Mat3> & rotations)
+{
+  OPENMVG_LOG_INFO << "Writing CSV: " << path;
+  std::ofstream csv(path.c_str());
+  if (!csv)
+    return;
+
+  const auto pose_to_view = BuildPoseToViewMap(sfm_data);
+
+  csv << "pose_id,view_id,image_path,qw,qx,qy,qz\n";
+  csv << std::fixed << std::setprecision(10);
+  for (const auto & it : rotations)
+  {
+    const openMVG::IndexT pose_id = it.first;
+    const openMVG::Mat3 & R = it.second;
+    openMVG::Quaternion q(R);
+    q.normalize();
+
+    openMVG::IndexT view_id = openMVG::UndefinedIndexT;
+    std::string image_path;
+    const auto view_it = pose_to_view.find(pose_id);
+    if (view_it != pose_to_view.end())
+    {
+      view_id = view_it->second;
+      image_path = ViewImagePath(sfm_data, view_id);
+    }
+
+    csv << pose_id << "," << view_id << "," << image_path << ","
+        << q.w() << "," << q.x() << "," << q.y() << "," << q.z() << "\n";
+  }
+}
+
+void WritePosesCsv(const std::string & path, const openMVG::sfm::SfM_Data & sfm_data)
+{
+  OPENMVG_LOG_INFO << "Writing CSV: " << path;
+  std::ofstream csv(path.c_str());
+  if (!csv)
+    return;
+
+  const auto pose_to_view = BuildPoseToViewMap(sfm_data);
+
+  csv << "pose_id,view_id,image_path,cx,cy,cz,qw,qx,qy,qz\n";
+  csv << std::fixed << std::setprecision(10);
+  for (const auto & it : sfm_data.GetPoses())
+  {
+    const openMVG::IndexT pose_id = it.first;
+    const openMVG::geometry::Pose3 & pose = it.second;
+    const openMVG::Vec3 & c = pose.center();
+    openMVG::Quaternion q(pose.rotation());
+    q.normalize();
+
+    openMVG::IndexT view_id = openMVG::UndefinedIndexT;
+    std::string image_path;
+    const auto view_it = pose_to_view.find(pose_id);
+    if (view_it != pose_to_view.end())
+    {
+      view_id = view_it->second;
+      image_path = ViewImagePath(sfm_data, view_id);
+    }
+
+    csv << pose_id << "," << view_id << "," << image_path << ","
+        << c(0) << "," << c(1) << "," << c(2) << ","
+        << q.w() << "," << q.x() << "," << q.y() << "," << q.z() << "\n";
+  }
+}
+
+void WriteRelativeRotationsCsv(const std::string & path,
+                               const openMVG::sfm::SfM_Data & sfm_data,
+                               const openMVG::rotation_averaging::RelativeRotations & relatives_R)
+{
+  OPENMVG_LOG_INFO << "Writing CSV: " << path;
+  std::ofstream csv(path.c_str());
+  if (!csv)
+    return;
+
+  const auto pose_to_view = BuildPoseToViewMap(sfm_data);
+
+  csv << "pose_i,pose_j,view_i,view_j,image_i,image_j,qw,qx,qy,qz,weight\n";
+  csv << std::fixed << std::setprecision(10);
+  for (const auto & rel : relatives_R)
+  {
+    openMVG::Quaternion q(rel.Rij);
+    q.normalize();
+
+    openMVG::IndexT view_i = openMVG::UndefinedIndexT;
+    openMVG::IndexT view_j = openMVG::UndefinedIndexT;
+    std::string image_i;
+    std::string image_j;
+    const auto it_i = pose_to_view.find(rel.i);
+    const auto it_j = pose_to_view.find(rel.j);
+    if (it_i != pose_to_view.end())
+    {
+      view_i = it_i->second;
+      image_i = ViewImagePath(sfm_data, view_i);
+    }
+    if (it_j != pose_to_view.end())
+    {
+      view_j = it_j->second;
+      image_j = ViewImagePath(sfm_data, view_j);
+    }
+
+    csv << rel.i << "," << rel.j << ","
+        << view_i << "," << view_j << ","
+        << image_i << "," << image_j << ","
+        << q.w() << "," << q.x() << "," << q.y() << "," << q.z() << ","
+        << rel.weight << "\n";
+  }
+}
+
 } // namespace
 
 namespace openMVG{
@@ -219,14 +355,6 @@ void GlobalSfMReconstructionEngine_RelativeMotions::SetImuRotationPrior(
   imu_rotation_histogram_bucket_deg_ = histogram_bucket_deg;
 }
 
-void GlobalSfMReconstructionEngine_RelativeMotions::SetTranslationAveragingConstraints(
-  double scale_multiplier,
-  double weight)
-{
-  translation_averaging_constraint_scale_multiplier_ = scale_multiplier;
-  translation_averaging_constraint_weight_ = weight;
-}
-
 bool GlobalSfMReconstructionEngine_RelativeMotions::Process() {
 
   //-------------------
@@ -302,6 +430,12 @@ bool GlobalSfMReconstructionEngine_RelativeMotions::Compute_Global_Rotations
 {
   if (relatives_R.empty())
     return false;
+  if (!sOut_directory_.empty())
+  {
+    const std::string csv_path =
+      stlplus::create_filespec(sOut_directory_, "relative_rotations_before_rotation_averaging", "csv");
+    WriteRelativeRotationsCsv(csv_path, sfm_data_, relatives_R);
+  }
   // Log statistics about the relative rotation graph
   {
     std::set<IndexT> set_pose_ids;
@@ -582,6 +716,12 @@ bool GlobalSfMReconstructionEngine_RelativeMotions::Compute_Global_Rotations
       }
     }
   }
+  if (b_rotation_averaging && !sOut_directory_.empty())
+  {
+    const std::string csv_path =
+      stlplus::create_filespec(sOut_directory_, "camera_rotations_after_rotation_averaging", "csv");
+    WriteRotationsCsv(csv_path, sfm_data_, global_rotations);
+  }
   return b_rotation_averaging;
 }
 
@@ -602,7 +742,15 @@ bool GlobalSfMReconstructionEngine_RelativeMotions::Compute_Global_Translations
     global_rotations,
     tripletWise_matches,
     translation_averaging_constraint_scale_multiplier_,
-    translation_averaging_constraint_weight_);
+    translation_averaging_constraint_weight_,
+    sOut_directory_);
+
+  if (!sOut_directory_.empty())
+  {
+    const std::string csv_path =
+      stlplus::create_filespec(sOut_directory_, "camera_poses_after_translation_averaging", "csv");
+    WritePosesCsv(csv_path, sfm_data_);
+  }
 
   if (!sLogging_file_.empty())
   {
@@ -744,6 +892,12 @@ bool GlobalSfMReconstructionEngine_RelativeMotions::Adjust()
     );
   if (b_BA_Status)
   {
+    if (!sOut_directory_.empty())
+    {
+      const std::string csv_path =
+        stlplus::create_filespec(sOut_directory_, "camera_poses_after_ba_T_X", "csv");
+      WritePosesCsv(csv_path, sfm_data_);
+    }
     if (!sLogging_file_.empty())
     {
       Save(sfm_data_,
@@ -774,6 +928,12 @@ bool GlobalSfMReconstructionEngine_RelativeMotions::Adjust()
         stlplus::create_filespec(stlplus::folder_part(sLogging_file_), "structure_01_refine_RT_Xi", "ply"),
         ESfM_Data(EXTRINSICS | STRUCTURE));
     }
+    if (b_BA_Status && !sOut_directory_.empty())
+    {
+      const std::string csv_path =
+        stlplus::create_filespec(sOut_directory_, "camera_poses_after_ba_RT_X", "csv");
+      WritePosesCsv(csv_path, sfm_data_);
+    }
   }
 
   if (b_BA_Status && ReconstructionEngine::intrinsic_refinement_options_ != Intrinsic_Parameter_Type::NONE) {
@@ -799,6 +959,12 @@ bool GlobalSfMReconstructionEngine_RelativeMotions::Adjust()
       Save(sfm_data_,
         stlplus::create_filespec(stlplus::folder_part(sLogging_file_), "structure_02_refine_KRT_Xi", "ply"),
         ESfM_Data(EXTRINSICS | STRUCTURE));
+    }
+    if (b_BA_Status && !sOut_directory_.empty())
+    {
+      const std::string csv_path =
+        stlplus::create_filespec(sOut_directory_, "camera_poses_after_ba_KRT_X", "csv");
+      WritePosesCsv(csv_path, sfm_data_);
     }
   }
 
@@ -856,7 +1022,12 @@ bool GlobalSfMReconstructionEngine_RelativeMotions::Adjust()
       stlplus::create_filespec(stlplus::folder_part(sLogging_file_), "structure_04_outlier_removed", "ply"),
       ESfM_Data(EXTRINSICS | STRUCTURE));
   }
-
+  if (b_BA_Status && !sOut_directory_.empty())
+  {
+    const std::string csv_path =
+      stlplus::create_filespec(sOut_directory_, "camera_poses_after_ba_final", "csv");
+    WritePosesCsv(csv_path, sfm_data_);
+  }
   return b_BA_Status;
 }
 
