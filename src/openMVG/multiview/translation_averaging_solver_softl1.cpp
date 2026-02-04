@@ -85,17 +85,19 @@ struct SmallScaleError
   double weight_;
 };
 
-// Cost functor for maximum distance constraint between camera pairs
-// Penalizes if ||t_i - t_j|| exceeds max_distance
-// This is used to enforce motion constraints (e.g., speed limits)
+// Cost functor for maximum distance constraint between camera pairs.
+// Penalizes if ||C_i - C_j|| exceeds max_distance, where C = -R^T t.
+// This is used to enforce motion constraints (e.g., speed limits).
 struct MaxDistanceError
 {
   explicit MaxDistanceError
   (
     double max_distance,
+    const Mat3 & R_i,
+    const Mat3 & R_j,
     double weight = 1.0
   )
-  : max_distance_(max_distance), weight_(weight)
+  : max_distance_(max_distance), weight_(weight), R_i_(R_i), R_j_(R_j)
   {}
 
   template <typename T>
@@ -106,27 +108,30 @@ struct MaxDistanceError
     T* residual
   ) const
   {
-    // Compute distance between camera centers
-    T dx = t_j[0] - t_i[0];
-    T dy = t_j[1] - t_i[1];
-    T dz = t_j[2] - t_i[2];
+    // Compute distance between camera centers: C = -R^T * t
+    T ci_x = -(T(R_i_(0,0)) * t_i[0] + T(R_i_(1,0)) * t_i[1] + T(R_i_(2,0)) * t_i[2]);
+    T ci_y = -(T(R_i_(0,1)) * t_i[0] + T(R_i_(1,1)) * t_i[1] + T(R_i_(2,1)) * t_i[2]);
+    T ci_z = -(T(R_i_(0,2)) * t_i[0] + T(R_i_(1,2)) * t_i[1] + T(R_i_(2,2)) * t_i[2]);
+
+    T cj_x = -(T(R_j_(0,0)) * t_j[0] + T(R_j_(1,0)) * t_j[1] + T(R_j_(2,0)) * t_j[2]);
+    T cj_y = -(T(R_j_(0,1)) * t_j[0] + T(R_j_(1,1)) * t_j[1] + T(R_j_(2,1)) * t_j[2]);
+    T cj_z = -(T(R_j_(0,2)) * t_j[0] + T(R_j_(1,2)) * t_j[1] + T(R_j_(2,2)) * t_j[2]);
+
+    T dx = cj_x - ci_x;
+    T dy = cj_y - ci_y;
+    T dz = cj_z - ci_z;
     T dist = ceres::sqrt(dx*dx + dy*dy + dz*dz);
     
-    // Logistic hinge (Softplus) penalty:
-    // residual = weight * log(1 + exp(k * (dist - threshold))) / k
-    // This provides a smooth transition and applies a small penalty even below the threshold.
-    const double k = 5.0; // Steepness of the transition
-    T x = T(k) * (dist - T(max_distance_));
-    
-    // Numerically stable Softplus: log(1 + exp(x)) = max(0, x) + log(1 + exp(-|x|))
-    T softplus_x = (x > T(0.0) ? x : T(0.0)) + ceres::log(T(1.0) + ceres::exp(-ceres::abs(x)));
-    
-    residual[0] = T(weight_) * softplus_x / T(k);
+    // True hinge loss: zero penalty when within the limit.
+    T excess = dist - T(max_distance_);
+    residual[0] = (excess > T(0.0)) ? (T(weight_) * excess) : T(0.0);
     return true;
   }
 
   double max_distance_;
   double weight_;
+  Mat3 R_i_;
+  Mat3 R_j_;
 };
 
 
@@ -291,6 +296,7 @@ bool solve_translations_problem_softl1
 bool solve_translations_problem_softl1_with_constraints
 (
   const std::vector<openMVG::RelativeInfo_Vec> & vec_relative_group_estimates,
+  const std::vector<Mat3> & global_rotations,
   const Hash_Map<Pair, double> & max_distance_constraints,
   std::vector<Eigen::Vector3d> & translations,
   const double distance_constraint_weight,
@@ -313,6 +319,14 @@ bool solve_translations_problem_softl1_with_constraints
     }
   }
   const IndexT nb_poses = count_set.size();
+
+  // Validate rotation count (must match pose indices)
+  if (global_rotations.size() != nb_poses)
+  {
+    OPENMVG_LOG_ERROR << "Global rotations size mismatch. Expected " << nb_poses
+                      << ", got " << global_rotations.size() << ".";
+    return false;
+  }
 
   //--
   // Build the parameters arrays:
@@ -418,7 +432,8 @@ bool solve_translations_problem_softl1_with_constraints
       {
         ceres::CostFunction* cost_function =
             new ceres::AutoDiffCostFunction<MaxDistanceError, 1, 3, 3>(
-                new MaxDistanceError(max_dist, distance_constraint_weight));
+                new MaxDistanceError(max_dist, global_rotations[pose_i], global_rotations[pose_j],
+                                     distance_constraint_weight));
 
         problem.AddResidualBlock(
           cost_function,

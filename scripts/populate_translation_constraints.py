@@ -14,7 +14,7 @@ Usage:
         --sfm_data sfm_data.json \
         --output sfm_data_with_constraints.json \
         --max_velocity 1.0 \
-        --time_window 10.0
+        --time_window 1.0
 
 Arguments:
     --sfm_data: Input sfm_data.json file
@@ -269,8 +269,8 @@ def main():
     parser.add_argument(
         '--time_window',
         type=float,
-        default=10.0,
-        help='Maximum time window in seconds for constraints (default: 10.0)'
+        default=1.0,
+        help='Maximum time window in seconds for constraints (default: 1.0)'
     )
     
     args = parser.parse_args()
