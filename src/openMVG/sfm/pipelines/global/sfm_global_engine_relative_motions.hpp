@@ -44,12 +44,6 @@ public:
   void SetRotationAveragingMethod(ERotationAveragingMethod eRotationAveragingMethod);
   void SetTranslationAveragingMethod(ETranslationAveragingMethod eTranslation_averaging_method_);
 
-  void SetImuRotationPrior(
-    double weight,
-    bool filter_outliers,
-    double max_error_deg,
-    double histogram_bucket_deg);
-
   bool Process() override;
 
 protected:
@@ -94,13 +88,6 @@ private:
   // Parameter
   ERotationAveragingMethod eRotation_averaging_method_;
   ETranslationAveragingMethod eTranslation_averaging_method_;
-  double imu_rotation_weight_ = 0.0;
-  bool imu_rotation_filter_outliers_ = false;
-  double imu_rotation_max_error_deg_ = 45.0;
-  double imu_rotation_histogram_bucket_deg_ = 10.0;
-
-  Hash_Map<IndexT, Mat3> imu_pose_rotations_;
-  bool imu_rotations_loaded_ = false;
 
   //-- Data provider
   Features_Provider  * features_provider_;

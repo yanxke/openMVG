@@ -101,7 +101,6 @@ class EXIFInfo {
   std::string SubSecTimeOriginal;   // Sub-second time that original picture was taken
   std::string Copyright;            // File copyright information
   std::string ImageUniqueID;        // Unique identifier assigned to the picture
-  std::string UserComment;          // EXIF UserComment
   double ExposureTime;              // Exposure time in seconds
   double FNumber;                   // F/stop
   unsigned short ExposureProgram;   // Exposure program
@@ -145,7 +144,6 @@ class EXIFInfo {
     double Altitude;                  // Altitude in meters, relative to sea level
     char AltitudeRef;                 // 0 = above sea level, -1 = below sea level
     double DOP;                       // GPS degree of precision (DOP)
-    double ImgDirection;              // GPS direction of the image
     struct Coord_t {
       double degrees;
       double minutes;

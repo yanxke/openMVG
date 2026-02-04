@@ -32,8 +32,7 @@ bool GlobalSfM_Rotation_AveragingSolver::Run(
   ERotationAveragingMethod eRotationAveragingMethod,
   ERelativeRotationInferenceMethod eRelativeRotationInferenceMethod,
   const RelativeRotations & relativeRot_In,
-  Hash_Map<IndexT, Mat3> & map_globalR,
-  IndexT fixed_pose_id
+  Hash_Map<IndexT, Mat3> & map_globalR
 ) const
 {
   RelativeRotations relativeRotations = relativeRot_In;
@@ -79,30 +78,6 @@ bool GlobalSfM_Rotation_AveragingSolver::Run(
     RelativeRotation & rel = *iter;
     rel.i = reindexForward[rel.i];
     rel.j = reindexForward[rel.j];
-  }
-
-  if (fixed_pose_id != UndefinedIndexT)
-  {
-    const auto it = reindexForward.find(fixed_pose_id);
-    if (it != reindexForward.end() && it->second != 0)
-    {
-      const IndexT fixed_idx = it->second;
-      const IndexT old0 = reindexBackward[0];
-
-      reindexForward[fixed_pose_id] = 0;
-      reindexForward[old0] = fixed_idx;
-      reindexBackward[0] = fixed_pose_id;
-      reindexBackward[fixed_idx] = old0;
-
-      for (RelativeRotations::iterator iter = relativeRotations.begin();  iter != relativeRotations.end(); ++iter)
-      {
-        RelativeRotation & rel = *iter;
-        if (rel.i == 0) rel.i = fixed_idx;
-        else if (rel.i == fixed_idx) rel.i = 0;
-        if (rel.j == 0) rel.j = fixed_idx;
-        else if (rel.j == fixed_idx) rel.j = 0;
-      }
-    }
   }
 
   //- B. solve global rotation computation

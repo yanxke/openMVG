@@ -35,14 +35,6 @@ parser = argparse.ArgumentParser(description="Runs the SfM global pipeline E2E."
 parser.add_argument("-fm", "--describerMethod", type=str, default="SIFT", help="Feature describer method.")
 parser.add_argument("-fp", "--describerPreset", type=str, default="NORMAL", help="Feature describer preset.")
 parser.add_argument("-mr", "--ratio", type=float, default=0.8, help="Matching ratio threshold.")
-parser.add_argument("--imu_rotation_weight", type=float, default=0.5, help="IMU rotation prior weight (0 disables).")
-parser.add_argument("--imu_rotation_max_error", type=float, default=45.0, help="Max error (deg) for IMU prior filtering.")
-parser.add_argument("--imu_rotation_histogram_bucket", type=float, default=10.0, help="IMU error histogram bucket size (deg).")
-parser.add_argument("--imu_rotation_filter_outliers", dest="imu_rotation_filter_outliers", action="store_true",
-                    help="Filter IMU priors with large errors (default).")
-parser.add_argument("--no_imu_rotation_filter_outliers", dest="imu_rotation_filter_outliers", action="store_false",
-                    help="Disable IMU prior outlier filtering.")
-parser.set_defaults(imu_rotation_filter_outliers=True)
 parser.add_argument("input_dir", help="Input directory containing the images.")
 parser.add_argument("output_dir", help="Output directory where the project files will be saved.")
 
@@ -118,60 +110,16 @@ with open(log_path, "a") as log_file:
            [os.path.join(OPENMVG_SFM_BIN, "openMVG_main_ComputeMatches"), "-i", matches_dir+"/sfm_data.json", "-p", matches_dir+ "/pairs.bin", "-o", matches_dir + "/matches.putative.bin", "-r", str(args.ratio)],
            log_file)
 
-  # 5. Filter matches with motion priors integrated into RANSAC
-  # Motion priors enforce: landscape mode (roll~0), horizontal optical axis (pitch~0),
-  # GPS compass consistency (yaw), and flat surface (ty~0)
-  run_step("5. Filter matches with priors",
-           [os.path.join(OPENMVG_SFM_BIN, "openMVG_main_GeometricFilterWithPriors"),
-            "-i", matches_dir+"/sfm_data.json",
-            "-m", matches_dir+"/matches.putative.bin",
-            "-g", "e",
-            "-o", matches_dir+"/matches.e.bin",
-            "-y", "25.0",  # Yaw tolerance (degrees)
-            "-x", "20.0",  # Pitch tolerance (degrees)
-            "-z", "20.0",  # Roll tolerance (degrees)
-            "-a", "0.4",   # Altitude (ty) tolerance
-            "-w", "0.8",   # Reduced prior weight in RANSAC scoring
-            "-I", "1024",  # Reduced iterations (default 2048)
-            "-H", "180.0", # Max heading diff (180.0 to disable)
-            "-S", "0",    # Spot-check sample size (0 to disable)
-            # "-c", "1000"   # Regions cache size (1000 images)
-            ],
+  run_step("5. Filter matches",
+           [os.path.join(OPENMVG_SFM_BIN, "openMVG_main_GeometricFilter"), "-i", matches_dir+"/sfm_data.json", "-m", matches_dir+"/matches.putative.bin" , "-g" , "e" , "-o" , matches_dir+"/matches.e.bin"],
            log_file)
-
-  # 5b. Optional: Additional post-filtering by priors (now mostly redundant since priors are in step 5)
-  # Uncomment if you want stricter filtering after RANSAC
-  # run_step("5b. Filter matches by priors",
-  #           [os.path.join(OPENMVG_SFM_BIN, "openMVG_main_GeometricFilterByPriors"),
-  #           "-i", os.path.join(matches_dir, "sfm_data.json"),
-  #           "-m", os.path.join(matches_dir, "matches.e.bin"),
-  #           "-o", os.path.join(matches_dir, "matches.e.priors.bin"),
-  #           "-f", matches_dir,
-  #           "-y", "15.0", # Yaw tolerance
-  #           "-x", "10.0", # Pitch tolerance
-  #           "-z", "10.0", # Roll tolerance
-  #           "-a", "0.2"   # Altitude (ty) tolerance
-  #           ],
-  #           log_file)
-
-  actual_matches = os.path.join(matches_dir, "matches.e.bin")
 
   # Create the reconstruction if not present
   if not os.path.exists(reconstruction_dir):
     os.mkdir(reconstruction_dir)
 
   run_step("6. Do Global reconstruction",
-           [os.path.join(OPENMVG_SFM_BIN, "openMVG_main_SfM"),
-            "--sfm_engine", "GLOBAL",
-            "--input_file", matches_dir+"/sfm_data.json",
-            "--match_file", actual_matches,
-            "--output_dir", reconstruction_dir,
-            "--rotationAveraging", "1",
-            "-P",
-            "--imu_rotation_weight", str(args.imu_rotation_weight),
-            "--imu_rotation_max_error", str(args.imu_rotation_max_error),
-            "--imu_rotation_histogram_bucket", str(args.imu_rotation_histogram_bucket),
-            "--imu_rotation_filter_outliers", "1" if args.imu_rotation_filter_outliers else "0"],
+           [os.path.join(OPENMVG_SFM_BIN, "openMVG_main_SfM"), "--sfm_engine", "GLOBAL", "--input_file", matches_dir+"/sfm_data.json", "--match_file", matches_dir+"/matches.e.bin", "--output_dir", reconstruction_dir, "--rotationAveraging", "1", "-P"],
            log_file)
 
   # run_step("7. Colorize Structure",
