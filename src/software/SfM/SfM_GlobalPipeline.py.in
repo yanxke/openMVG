@@ -35,13 +35,15 @@ parser = argparse.ArgumentParser(description="Runs the SfM global pipeline E2E."
 parser.add_argument("-fm", "--describerMethod", type=str, default="SIFT", help="Feature describer method.")
 parser.add_argument("-fp", "--describerPreset", type=str, default="NORMAL", help="Feature describer preset.")
 parser.add_argument("-mr", "--ratio", type=float, default=0.8, help="Matching ratio threshold.")
-parser.add_argument("--imu_rotation_weight", type=float, default=0.5, help="IMU rotation prior weight (0 disables).")
+parser.add_argument("--imu_rotation_weight", type=float, default=0.1, help="IMU rotation prior weight (0 disables).")
 parser.add_argument("--imu_rotation_max_error", type=float, default=45.0, help="Max error (deg) for IMU prior filtering.")
 parser.add_argument("--imu_rotation_histogram_bucket", type=float, default=10.0, help="IMU error histogram bucket size (deg).")
 parser.add_argument("--imu_rotation_filter_outliers", dest="imu_rotation_filter_outliers", action="store_true",
                     help="Filter IMU priors with large errors (default).")
 parser.add_argument("--no_imu_rotation_filter_outliers", dest="imu_rotation_filter_outliers", action="store_false",
                     help="Disable IMU prior outlier filtering.")
+parser.add_argument("--enable_priors", action="store_true",
+                    help="Enable motion priors in geometric filtering (default: off; legacy -g e otherwise).")
 parser.set_defaults(imu_rotation_filter_outliers=True)
 parser.add_argument("input_dir", help="Input directory containing the images.")
 parser.add_argument("output_dir", help="Output directory where the project files will be saved.")
@@ -118,26 +120,36 @@ with open(log_path, "a") as log_file:
            [os.path.join(OPENMVG_SFM_BIN, "openMVG_main_ComputeMatches"), "-i", matches_dir+"/sfm_data.json", "-p", matches_dir+ "/pairs.bin", "-o", matches_dir + "/matches.putative.bin", "-r", str(args.ratio)],
            log_file)
 
-  # 5. Filter matches with motion priors integrated into RANSAC
+  # 5. Filter matches (with or without motion priors)
   # Motion priors enforce: landscape mode (roll~0), horizontal optical axis (pitch~0),
   # GPS compass consistency (yaw), and flat surface (ty~0)
-  run_step("5. Filter matches with priors",
-           [os.path.join(OPENMVG_SFM_BIN, "openMVG_main_GeometricFilterWithPriors"),
-            "-i", matches_dir+"/sfm_data.json",
-            "-m", matches_dir+"/matches.putative.bin",
-            "-g", "e",
-            "-o", matches_dir+"/matches.e.bin",
-            "-y", "25.0",  # Yaw tolerance (degrees)
-            "-x", "20.0",  # Pitch tolerance (degrees)
-            "-z", "20.0",  # Roll tolerance (degrees)
-            "-a", "0.4",   # Altitude (ty) tolerance
-            "-w", "0.8",   # Reduced prior weight in RANSAC scoring
-            "-I", "1024",  # Reduced iterations (default 2048)
-            "-H", "180.0", # Max heading diff (180.0 to disable)
-            "-S", "0",    # Spot-check sample size (0 to disable)
-            # "-c", "1000"   # Regions cache size (1000 images)
-            ],
-           log_file)
+  if args.enable_priors:
+    run_step("5. Filter matches with priors",
+             [os.path.join(OPENMVG_SFM_BIN, "openMVG_main_GeometricFilterWithPriors"),
+              "-i", matches_dir+"/sfm_data.json",
+              "-m", matches_dir+"/matches.putative.bin",
+              "-g", "e",
+              "-o", matches_dir+"/matches.e.bin",
+              "-y", "25.0",  # Yaw tolerance (degrees)
+              "-x", "20.0",  # Pitch tolerance (degrees)
+              "-z", "20.0",  # Roll tolerance (degrees)
+              "-a", "0.4",   # Altitude (ty) tolerance
+              "-w", "0.8",   # Reduced prior weight in RANSAC scoring
+              "-I", "1024",  # Reduced iterations (default 2048)
+              "-H", "180.0", # Max heading diff (180.0 to disable)
+              "-S", "0",    # Spot-check sample size (0 to disable)
+              # "-c", "1000"   # Regions cache size (1000 images)
+              ],
+             log_file)
+  else:
+    run_step("5. Filter matches (no priors)",
+             [os.path.join(OPENMVG_SFM_BIN, "openMVG_main_GeometricFilter"),
+              "-i", matches_dir+"/sfm_data.json",
+              "-m", matches_dir+"/matches.putative.bin",
+              "-g", "e",
+              "-o", matches_dir+"/matches.e.bin"
+              ],
+             log_file)
 
   # 5b. Optional: Additional post-filtering by priors (now mostly redundant since priors are in step 5)
   # Uncomment if you want stricter filtering after RANSAC
