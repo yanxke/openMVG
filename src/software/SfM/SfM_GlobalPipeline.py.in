@@ -46,6 +46,20 @@ parser.add_argument("-gp", "--geofilt_prec", type=float, default=0.0, help="Geom
 parser.add_argument("-mi", "--min_inliers", type=int, default=50, help="Minimum inlier count per pair.")
 parser.add_argument("-ri", "--ransac_iter", type=int, default=512, help="RANSAC iterations for geometric filter.")
 parser.set_defaults(imu_rotation_filter_outliers=True)
+
+# Bundle Adjustment refinement options
+parser.add_argument("-f", "--refine_intrinsics", type=str, default="NONE",
+                    help="Intrinsics refinement: ADJUST_ALL (default), NONE, ADJUST_FOCAL_LENGTH, "
+                         "ADJUST_PRINCIPAL_POINT, ADJUST_DISTORTION, or combinations with |")
+
+# Bundle Adjustment control options (-1=disable, 0=use default, >0=limit steps)
+parser.add_argument("--ba_rotation_steps", type=int, default=0,
+                    help="BA rotation refinement steps: -1=disable, 0=use default, >0=limit steps.")
+parser.add_argument("--ba_intrinsics_steps", type=int, default=0,
+                    help="BA intrinsics refinement steps: -1=disable, 0=use default, >0=limit steps.")
+parser.add_argument("--ba_final_steps", type=int, default=0,
+                    help="Final BA steps: -1=disable, 0=use default, >0=limit steps.")
+
 parser.add_argument("input_dir", help="Input directory containing the images.")
 parser.add_argument("output_dir", help="Output directory where the project files will be saved.")
 
@@ -162,19 +176,34 @@ with open(log_path, "a") as log_file:
   if not os.path.exists(reconstruction_dir):
     os.mkdir(reconstruction_dir)
 
-  run_step("6. Do Global reconstruction",
-           [os.path.join(OPENMVG_SFM_BIN, "openMVG_main_SfM"),
-            "--sfm_engine", "GLOBAL",
-            "--input_file", matches_dir+"/sfm_data.json",
-            "--match_file", actual_matches,
-            "--output_dir", reconstruction_dir,
-            "--rotationAveraging", "1",
-            "-P",
-            "--imu_rotation_weight", str(args.imu_rotation_weight),
-            "--imu_rotation_max_error", str(args.imu_rotation_max_error),
-            "--imu_rotation_histogram_bucket", str(args.imu_rotation_histogram_bucket),
-            "--imu_rotation_filter_outliers", "1" if args.imu_rotation_filter_outliers else "0"],
-           log_file)
+  # Build Global reconstruction command with BA options
+  global_recon_cmd = [
+    os.path.join(OPENMVG_SFM_BIN, "openMVG_main_SfM"),
+    "--sfm_engine", "GLOBAL",
+    "--input_file", matches_dir+"/sfm_data.json",
+    "--match_file", actual_matches,
+    "--output_dir", reconstruction_dir,
+    "--rotationAveraging", "1",
+    "-P",
+    "--refine_intrinsic_config", args.refine_intrinsics,
+    "--imu_rotation_weight", str(args.imu_rotation_weight),
+    "--imu_rotation_max_error", str(args.imu_rotation_max_error),
+    "--imu_rotation_histogram_bucket", str(args.imu_rotation_histogram_bucket),
+    "--imu_rotation_filter_outliers", "1" if args.imu_rotation_filter_outliers else "0"
+  ]
+
+  # Add BA control parameters
+  # -1 = disable, 0 = use default (don't pass param), >0 = limit steps
+  if args.ba_rotation_steps != 0:
+    global_recon_cmd.extend(["--ba_rotation_steps", str(args.ba_rotation_steps)])
+
+  if args.ba_intrinsics_steps != 0:
+    global_recon_cmd.extend(["--ba_intrinsics_steps", str(args.ba_intrinsics_steps)])
+
+  if args.ba_final_steps != 0:
+    global_recon_cmd.extend(["--ba_final_steps", str(args.ba_final_steps)])
+
+  run_step("6. Do Global reconstruction", global_recon_cmd, log_file)
 
   # run_step("7. Colorize Structure",
   #          [os.path.join(OPENMVG_SFM_BIN, "openMVG_main_ComputeSfM_DataColor"), "-i", reconstruction_dir+"/sfm_data.bin", "-o", os.path.join(reconstruction_dir,"colorized.ply")],

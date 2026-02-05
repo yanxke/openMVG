@@ -33,7 +33,10 @@ public:
     sfm_data_(sfm_data),
     intrinsic_refinement_options_(cameras::Intrinsic_Parameter_Type::ADJUST_ALL),
     extrinsic_refinement_options_(sfm::Extrinsic_Parameter_Type::ADJUST_ALL),
-    b_use_motion_prior_(false)
+    b_use_motion_prior_(false),
+    ba_rotation_steps_(0),
+    ba_intrinsics_steps_(0),
+    ba_final_steps_(0)
   {
   }
 
@@ -75,6 +78,36 @@ public:
     b_use_motion_prior_ = rhs;
   }
 
+  void Set_BA_Rotation_Steps(int steps)
+  {
+    ba_rotation_steps_ = steps;
+  }
+
+  int Get_BA_Rotation_Steps() const
+  {
+    return ba_rotation_steps_;
+  }
+
+  void Set_BA_Intrinsics_Steps(int steps)
+  {
+    ba_intrinsics_steps_ = steps;
+  }
+
+  int Get_BA_Intrinsics_Steps() const
+  {
+    return ba_intrinsics_steps_;
+  }
+
+  void Set_BA_Final_Steps(int steps)
+  {
+    ba_final_steps_ = steps;
+  }
+
+  int Get_BA_Final_Steps() const
+  {
+    return ba_final_steps_;
+  }
+
   const SfM_Data & Get_SfM_Data() const {return sfm_data_;}
 
 protected:
@@ -91,6 +124,11 @@ protected:
   cameras::Intrinsic_Parameter_Type intrinsic_refinement_options_;
   sfm::Extrinsic_Parameter_Type extrinsic_refinement_options_;
   bool b_use_motion_prior_;
+
+  // Bundle Adjustment step control (-1=disable, 0=use default, >0=limit steps)
+  int ba_rotation_steps_;
+  int ba_intrinsics_steps_;
+  int ba_final_steps_;
 };
 
 } // namespace sfm
