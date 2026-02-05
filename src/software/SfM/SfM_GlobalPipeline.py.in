@@ -124,8 +124,12 @@ with open(log_path, "a") as log_file:
 
   pairs_file = os.path.join(matches_dir, "pairs.bin")
   if not os.path.exists(pairs_file):
-    run_step("3. Compute matching pairs",
-             [os.path.join(OPENMVG_SFM_BIN, "openMVG_main_PairGenerator"), "-i", matches_dir+"/sfm_data.json", "-o", pairs_file],
+    run_step("3. Compute matching pairs (compass-based)",
+             [os.path.join(OPENMVG_SFM_BIN, "openMVG_main_PairGenerator"),
+              "-i", matches_dir+"/sfm_data.json",
+              "-o", pairs_file,
+              "-m", "COMPASS",
+              "-h", "90.0"],
              log_file)
   else:
     print ("3. Compute matching pairs (skipped, pairs.bin exists)")

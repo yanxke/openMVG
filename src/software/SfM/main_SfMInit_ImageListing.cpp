@@ -25,8 +25,10 @@
 
 #include <fstream>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <utility>
+#include <vector>
 
 using namespace openMVG;
 using namespace openMVG::cameras;
@@ -34,6 +36,97 @@ using namespace openMVG::exif;
 using namespace openMVG::geodesy;
 using namespace openMVG::image;
 using namespace openMVG::sfm;
+
+/// Parse IMU rotation matrix from UserComment EXIF field
+/// Format: "Rotation: r11,r12,r13,r21,r22,r23,r31,r32,r33"
+/// Returns Device->World rotation in ENU frame
+bool ParseImuRotationFromUserComment(const std::string & comment, openMVG::Mat3 & rotation_dw)
+{
+  const std::string key = "Rotation:";
+  const std::size_t pos = comment.find(key);
+  if (pos == std::string::npos)
+    return false;
+
+  std::string rot_part = comment.substr(pos + key.size());
+  for (char & c : rot_part)
+  {
+    if (c == '\n' || c == '\r')
+      c = ' ';
+  }
+
+  std::vector<double> vals;
+  vals.reserve(9);
+  std::string token;
+  std::stringstream ss(rot_part);
+  while (std::getline(ss, token, ','))
+  {
+    std::stringstream t(token);
+    double v = 0.0;
+    if (t >> v)
+      vals.push_back(v);
+  }
+  if (vals.size() < 9)
+    return false;
+
+  rotation_dw << vals[0], vals[1], vals[2],
+                  vals[3], vals[4], vals[5],
+                  vals[6], vals[7], vals[8];
+  return true;
+}
+
+/// Parse XMP stepsSinceTaskStart from image file
+/// XMP namespace: https://clobotics.com/storecapture/1.0/
+bool ParseXmpStepCounter(const std::string & filename, int & step_counter)
+{
+  std::ifstream file(filename, std::ios::binary);
+  if (!file.is_open())
+    return false;
+
+  // Read file content (limit to first 1MB for XMP search)
+  const size_t max_read = 1024 * 1024;
+  std::vector<char> buffer(max_read);
+  file.read(buffer.data(), max_read);
+  std::streamsize bytes_read = file.gcount();
+  file.close();
+
+  if (bytes_read <= 0)
+    return false;
+
+  std::string content(buffer.data(), bytes_read);
+
+  // Look for stepsSinceTaskStart in XMP data
+  const std::string key = "stepsSinceTaskStart";
+  size_t pos = content.find(key);
+  if (pos == std::string::npos)
+    return false;
+
+  // Find the value after the key (format: <prefix:stepsSinceTaskStart>VALUE</prefix:stepsSinceTaskStart>)
+  pos = content.find('>', pos);
+  if (pos == std::string::npos)
+    return false;
+  pos++; // Move past '>'
+
+  size_t end_pos = content.find('<', pos);
+  if (end_pos == std::string::npos)
+    return false;
+
+  std::string value_str = content.substr(pos, end_pos - pos);
+
+  // Trim whitespace
+  value_str.erase(0, value_str.find_first_not_of(" \t\n\r"));
+  value_str.erase(value_str.find_last_not_of(" \t\n\r") + 1);
+
+  // Parse integer
+  try
+  {
+    step_counter = std::stoi(value_str);
+    return true;
+  }
+  catch (...)
+  {
+    return false;
+  }
+}
 
 /// Check that Kmatrix is a string like "f;0;ppx;0;f;ppy;0;0;1"
 /// With f,ppx,ppy as valid numerical value
@@ -541,28 +634,133 @@ int main(int argc, char **argv)
         v.center_weight_ = prior_w_info.second;
       }
 
+      // Try to read GPS compass heading and IMU rotation
+      std::unique_ptr<Exif_IO> exifReader_heading(new Exif_IO_EasyExif);
+      if (exifReader_heading->open(sImageFilename))
+      {
+        double heading;
+        if (exifReader_heading->GPSImageDirection(&heading))
+        {
+          v.b_has_heading_ = true;
+          v.gps_heading_ = heading;
+        }
+
+        // Try to read IMU rotation from UserComment
+        std::string user_comment;
+        if (exifReader_heading->UserComment(&user_comment))
+        {
+          Mat3 R_dw;
+          if (ParseImuRotationFromUserComment(user_comment, R_dw))
+          {
+            v.b_has_imu_rotation_ = true;
+            v.imu_rotation_ = R_dw;
+          }
+        }
+      }
+
+      // Try to read XMP step counter
+      int step_counter;
+      if (ParseXmpStepCounter(sImageFilename, step_counter))
+      {
+        v.b_has_step_counter_ = true;
+        v.step_counter_ = step_counter;
+      }
+
       // Add the view to the sfm_container
       views[v.id_view] = std::make_shared<ViewPriors>(v);
     }
     else
     {
-      View v(*iter_image, views.size(), views.size(), views.size(), width, height);
+      // Check if we have GPS heading, IMU rotation, or XMP step counter even without GPS position
+      std::unique_ptr<Exif_IO> exifReader_heading(new Exif_IO_EasyExif);
+      double heading;
+      bool has_heading = false;
+      Mat3 R_dw;
+      bool has_imu_rotation = false;
+      int step_counter;
+      bool has_step_counter = false;
 
-      // Add intrinsic related to the image (if any)
-      if (!intrinsic)
+      if (exifReader_heading->open(sImageFilename))
       {
-        //Since the view have invalid intrinsic data
-        // (export the view, with an invalid intrinsic field value)
-        v.id_intrinsic = UndefinedIndexT;
+        if (exifReader_heading->GPSImageDirection(&heading))
+        {
+          has_heading = true;
+        }
+
+        // Try to read IMU rotation from UserComment
+        std::string user_comment;
+        if (exifReader_heading->UserComment(&user_comment))
+        {
+          if (ParseImuRotationFromUserComment(user_comment, R_dw))
+          {
+            has_imu_rotation = true;
+          }
+        }
+      }
+
+      // Try to read XMP step counter
+      if (ParseXmpStepCounter(sImageFilename, step_counter))
+      {
+        has_step_counter = true;
+      }
+
+      // If we have any metadata (heading, IMU, or step counter), use ViewPriors to store it
+      if (has_heading || has_imu_rotation || has_step_counter)
+      {
+        ViewPriors v(*iter_image, views.size(), views.size(), views.size(), width, height);
+
+        // Add intrinsic related to the image (if any)
+        if (!intrinsic)
+        {
+          v.id_intrinsic = UndefinedIndexT;
+        }
+        else
+        {
+          intrinsics[v.id_intrinsic] = intrinsic;
+        }
+
+        if (has_heading)
+        {
+          v.b_has_heading_ = true;
+          v.gps_heading_ = heading;
+        }
+
+        if (has_imu_rotation)
+        {
+          v.b_has_imu_rotation_ = true;
+          v.imu_rotation_ = R_dw;
+        }
+
+        if (has_step_counter)
+        {
+          v.b_has_step_counter_ = true;
+          v.step_counter_ = step_counter;
+        }
+
+        // Add the view to the sfm_container
+        views[v.id_view] = std::make_shared<ViewPriors>(v);
       }
       else
       {
-        // Add the defined intrinsic to the sfm_container
-        intrinsics[v.id_intrinsic] = intrinsic;
-      }
+        // No heading available, use regular View
+        View v(*iter_image, views.size(), views.size(), views.size(), width, height);
 
-      // Add the view to the sfm_container
-      views[v.id_view] = std::make_shared<View>(v);
+        // Add intrinsic related to the image (if any)
+        if (!intrinsic)
+        {
+          //Since the view have invalid intrinsic data
+          // (export the view, with an invalid intrinsic field value)
+          v.id_intrinsic = UndefinedIndexT;
+        }
+        else
+        {
+          // Add the defined intrinsic to the sfm_container
+          intrinsics[v.id_intrinsic] = intrinsic;
+        }
+
+        // Add the view to the sfm_container
+        views[v.id_view] = std::make_shared<View>(v);
+      }
     }
   }
 

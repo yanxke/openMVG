@@ -9,11 +9,13 @@
 #include "openMVG/matching_image_collection/Pair_Builder.hpp"
 #include "openMVG/sfm/sfm_data.hpp"
 #include "openMVG/sfm/sfm_data_io.hpp"
+#include "openMVG/sfm/sfm_view_priors.hpp"
 
 #include "third_party/cmdLine/cmdLine.h"
 #include "third_party/stlplus3/filesystemSimplified/file_system.hpp"
 
 #include <iostream>
+#include <cmath>
 
 /**
  * @brief Current list of available pair mode
@@ -22,7 +24,8 @@
 enum EPairMode
 {
   PAIR_EXHAUSTIVE = 0, // Build every combination of image pairs
-  PAIR_CONTIGUOUS = 1  // Only consecutive image pairs (useful for video mode)
+  PAIR_CONTIGUOUS = 1, // Only consecutive image pairs (useful for video mode)
+  PAIR_COMPASS = 2     // Only pairs with compass heading within threshold (requires GPS heading in EXIF)
 };
 
 using namespace openMVG;
@@ -37,10 +40,12 @@ void usage( const char* argv0 )
             << "[-m|--pair_mode] mode     Pair generation mode\n"
             << "       EXHAUSTIVE:        Build all possible pairs. [default]\n"
             << "       CONTIGUOUS:        Build pairs for contiguous images (use it with --contiguous_count parameter)\n"
+            << "       COMPASS:           Build pairs where compass heading difference <= threshold\n"
             << "[-c|--contiguous_count] X Number of contiguous links\n"
             << "       X: will match 0 with (1->X), ...]\n"
             << "       2: will match 0 with (1,2), 1 with (2,3), ...\n"
             << "       3: will match 0 with (1,2,3), 1 with (2,3,4), ...\n"
+            << "[-h|--heading_threshold] T Maximum heading difference in degrees (default: 90.0, used with COMPASS mode)\n"
             << std::endl;
 }
 
@@ -53,6 +58,7 @@ int main( int argc, char** argv )
   std::string sOutputPairsFilename;
   std::string sPairMode        = "EXHAUSTIVE";
   int         iContiguousCount = -1;
+  double      dHeadingThreshold = 90.0;
 
   // Mandatory elements:
   cmd.add( make_option( 'i', sSfMDataFilename, "input_file" ) );
@@ -60,6 +66,7 @@ int main( int argc, char** argv )
   // Optional elements:
   cmd.add( make_option( 'm', sPairMode, "pair_mode" ) );
   cmd.add( make_option( 'c', iContiguousCount, "contiguous_count" ) );
+  cmd.add( make_option( 'h', dHeadingThreshold, "heading_threshold" ) );
 
   try
   {
@@ -78,11 +85,12 @@ int main( int argc, char** argv )
   // 0. Parse parameters
   std::cout << " You called:\n"
             << argv[ 0 ] << "\n"
-            << "--input_file       : " << sSfMDataFilename << "\n"
-            << "--output_file      : " << sOutputPairsFilename << "\n"
+            << "--input_file         : " << sSfMDataFilename << "\n"
+            << "--output_file        : " << sOutputPairsFilename << "\n"
             << "Optional parameters\n"
-            << "--pair_mode        : " << sPairMode << "\n"
-            << "--contiguous_count : " << iContiguousCount << "\n"
+            << "--pair_mode          : " << sPairMode << "\n"
+            << "--contiguous_count   : " << iContiguousCount << "\n"
+            << "--heading_threshold  : " << dHeadingThreshold << "\n"
             << std::endl;
 
   if ( sSfMDataFilename.empty() )
@@ -114,6 +122,16 @@ int main( int argc, char** argv )
 
     pairMode = PAIR_CONTIGUOUS;
   }
+  else if ( sPairMode == "COMPASS" )
+  {
+    pairMode = PAIR_COMPASS;
+  }
+  else
+  {
+    usage( argv[ 0 ] );
+    std::cerr << "[Error] Unknown pair mode: " << sPairMode << std::endl;
+    exit( EXIT_FAILURE );
+  }
 
   // 1. Load SfM data scene
   std::cout << "Loading scene.";
@@ -139,6 +157,75 @@ int main( int argc, char** argv )
     case PAIR_CONTIGUOUS:
     {
       pairs = contiguousWithOverlap( NImage, iContiguousCount );
+      break;
+    }
+    case PAIR_COMPASS:
+    {
+      // Build pairs based on GPS compass heading
+      // First, extract headings from views
+      std::map<IndexT, double> headings;
+      size_t views_with_heading = 0;
+
+      for (const auto & view_pair : sfm_data.GetViews())
+      {
+        const IndexT view_id = view_pair.first;
+        const auto view_ptr = view_pair.second;
+
+        // Try to cast to ViewPriors to check for heading
+        const ViewPriors * view_priors = dynamic_cast<const ViewPriors*>(view_ptr.get());
+        if (view_priors && view_priors->b_has_heading_)
+        {
+          headings[view_id] = view_priors->gps_heading_;
+          views_with_heading++;
+        }
+      }
+
+      std::cout << "Found GPS headings for " << views_with_heading << " / " << NImage << " images." << std::endl;
+      std::cout << "Heading threshold: " << dHeadingThreshold << " degrees" << std::endl;
+
+      if (views_with_heading < 2)
+      {
+        std::cerr << "[Warning] Insufficient GPS headings for COMPASS mode. Falling back to EXHAUSTIVE." << std::endl;
+        pairs = exhaustivePairs( NImage );
+      }
+      else
+      {
+        // Generate pairs where heading difference is within threshold
+        size_t rejected = 0;
+        for (size_t i = 0; i < NImage; ++i)
+        {
+          for (size_t j = i + 1; j < NImage; ++j)
+          {
+            // Check if both images have headings
+            auto it_i = headings.find(i);
+            auto it_j = headings.find(j);
+
+            if (it_i != headings.end() && it_j != headings.end())
+            {
+              // Compute heading difference (handle wrap-around at 0/360)
+              double diff = std::abs(it_i->second - it_j->second);
+              if (diff > 180.0)
+                diff = 360.0 - diff;
+
+              if (diff <= dHeadingThreshold)
+              {
+                pairs.insert( std::make_pair( i, j ) );
+              }
+              else
+              {
+                rejected++;
+              }
+            }
+            else
+            {
+              // If either image lacks heading, include the pair (conservative)
+              pairs.insert( std::make_pair( i, j ) );
+            }
+          }
+        }
+
+        std::cout << "Generated " << pairs.size() << " pairs (rejected " << rejected << " based on heading)" << std::endl;
+      }
       break;
     }
     default:

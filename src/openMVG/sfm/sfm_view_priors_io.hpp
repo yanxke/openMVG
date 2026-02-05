@@ -44,6 +44,33 @@ void openMVG::sfm::ViewPriors::save( Archive & ar ) const
     ar( cereal::make_nvp( "rotation", mat ) );
   }
   */
+
+  // GPS compass heading
+  if (b_has_heading_)
+  {
+    ar( cereal::make_nvp( "has_gps_heading", b_has_heading_ ) );
+    ar( cereal::make_nvp( "gps_heading", gps_heading_ ) );
+  }
+
+  // IMU rotation matrix
+  if (b_has_imu_rotation_)
+  {
+    ar( cereal::make_nvp( "has_imu_rotation", b_has_imu_rotation_ ) );
+    const std::vector<std::vector<double>> mat =
+    {
+      { imu_rotation_( 0, 0 ), imu_rotation_( 0, 1 ), imu_rotation_( 0, 2 ) },
+      { imu_rotation_( 1, 0 ), imu_rotation_( 1, 1 ), imu_rotation_( 1, 2 ) },
+      { imu_rotation_( 2, 0 ), imu_rotation_( 2, 1 ), imu_rotation_( 2, 2 ) }
+    };
+    ar( cereal::make_nvp( "imu_rotation", mat ) );
+  }
+
+  // XMP step counter
+  if (b_has_step_counter_)
+  {
+    ar( cereal::make_nvp( "has_step_counter", b_has_step_counter_ ) );
+    ar( cereal::make_nvp( "step_counter", step_counter_ ) );
+  }
 }
 
 template <class Archive>
@@ -86,6 +113,50 @@ void openMVG::sfm::ViewPriors::load( Archive & ar )
     b_use_pose_rotation_ = false;
   }
   */
+
+  // GPS compass heading
+  try
+  {
+    ar( cereal::make_nvp( "has_gps_heading", b_has_heading_ ) );
+    ar( cereal::make_nvp( "gps_heading", gps_heading_ ) );
+  }
+  catch ( cereal::Exception & e )
+  {
+    // if it fails just use default settings
+    b_has_heading_ = false;
+    gps_heading_ = 0.0;
+  }
+
+  // IMU rotation matrix
+  try
+  {
+    ar( cereal::make_nvp( "has_imu_rotation", b_has_imu_rotation_ ) );
+    std::vector<std::vector<double>> mat( 3, std::vector<double>( 3 ) );
+    ar( cereal::make_nvp( "imu_rotation", mat ) );
+    // copy back to the rotation
+    imu_rotation_.row( 0 ) = Eigen::Map<const Vec3>( &( mat[0][0] ) );
+    imu_rotation_.row( 1 ) = Eigen::Map<const Vec3>( &( mat[1][0] ) );
+    imu_rotation_.row( 2 ) = Eigen::Map<const Vec3>( &( mat[2][0] ) );
+  }
+  catch ( const cereal::Exception & e )
+  {
+    // if it fails just use default settings
+    b_has_imu_rotation_ = false;
+    imu_rotation_ = Mat3::Identity();
+  }
+
+  // XMP step counter
+  try
+  {
+    ar( cereal::make_nvp( "has_step_counter", b_has_step_counter_ ) );
+    ar( cereal::make_nvp( "step_counter", step_counter_ ) );
+  }
+  catch ( cereal::Exception & e )
+  {
+    // if it fails just use default settings
+    b_has_step_counter_ = false;
+    step_counter_ = 0;
+  }
 }
 
 CEREAL_REGISTER_TYPE_WITH_NAME( openMVG::sfm::ViewPriors, "view_priors" );
