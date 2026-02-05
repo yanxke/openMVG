@@ -35,7 +35,7 @@ parser = argparse.ArgumentParser(description="Runs the SfM global pipeline E2E."
 parser.add_argument("-fm", "--describerMethod", type=str, default="SIFT", help="Feature describer method.")
 parser.add_argument("-fp", "--describerPreset", type=str, default="NORMAL", help="Feature describer preset.")
 parser.add_argument("-mr", "--ratio", type=float, default=0.8, help="Matching ratio threshold.")
-parser.add_argument("--imu_rotation_weight", type=float, default=0.5, help="IMU rotation prior weight (0 disables).")
+parser.add_argument("--imu_rotation_weight", type=float, default=0.1, help="IMU rotation prior weight (0 disables).")
 parser.add_argument("--imu_rotation_max_error", type=float, default=45.0, help="Max error (deg) for IMU prior filtering.")
 parser.add_argument("--imu_rotation_histogram_bucket", type=float, default=10.0, help="IMU error histogram bucket size (deg).")
 parser.add_argument("--imu_rotation_filter_outliers", dest="imu_rotation_filter_outliers", action="store_true",
