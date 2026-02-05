@@ -77,8 +77,8 @@ bool Relative_Pose_Engine::Relative_Pose_Engine::Process(
   }
 
   system::Timer t;
-
-  system::LoggerProgress my_progress_bar(posewise_matches.size(),"- Relative pose computation -" );
+  OPENMVG_LOG_INFO << "Computing relative poses for " << posewise_matches.size() << " pairs...";
+  system::LoggerProgress my_progress_bar(posewise_matches.size(), "- Relative pose computation -", 10);
 
   #ifdef OPENMVG_USE_OPENMP
     #pragma omp parallel for schedule(dynamic)

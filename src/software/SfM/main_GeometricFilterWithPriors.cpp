@@ -19,6 +19,7 @@
 #include "openMVG/matching_image_collection/E_ACRobust.hpp"
 #include "openMVG/matching_image_collection/E_ACRobust_Angular.hpp"
 #include "openMVG/matching_image_collection/E_ACRobust_WithPriors.hpp"
+#include "openMVG/matching_image_collection/E_ACRobust_Imu.hpp"
 #include "openMVG/matching_image_collection/Eo_Robust.hpp"
 #include "openMVG/matching_image_collection/F_ACRobust.hpp"
 #include "openMVG/matching_image_collection/GeometricFilter.hpp"
@@ -48,6 +49,67 @@ using namespace openMVG::robust;
 using namespace openMVG::sfm;
 using namespace openMVG::matching_image_collection;
 
+namespace {
+
+bool ParseImuRotationFromUserComment(const std::string & comment, openMVG::Mat3 & rotation_dw)
+{
+  const std::string key = "Rotation:";
+  const std::size_t pos = comment.find(key);
+  if (pos == std::string::npos)
+    return false;
+
+  std::string rot_part = comment.substr(pos + key.size());
+  for (char & c : rot_part)
+  {
+    if (c == '\n' || c == '\r')
+      c = ' ';
+  }
+
+  std::vector<double> vals;
+  vals.reserve(9);
+  std::string token;
+  std::stringstream ss(rot_part);
+  while (std::getline(ss, token, ','))
+  {
+    std::stringstream t(token);
+    double v = 0.0;
+    if (t >> v)
+      vals.push_back(v);
+  }
+  if (vals.size() < 9)
+    return false;
+
+  rotation_dw << vals[0], vals[1], vals[2],
+                  vals[3], vals[4], vals[5],
+                  vals[6], vals[7], vals[8];
+  return true;
+}
+
+openMVG::Mat3 DeviceToCameraRotation()
+{
+  // Rear camera, device axes to camera axes (X right, Y down, Z forward).
+  openMVG::Mat3 R;
+  R << 1.0, 0.0, 0.0,
+       0.0, -1.0, 0.0,
+       0.0, 0.0, -1.0;
+  return R;
+}
+
+openMVG::Mat3 DeviceLandscapeLeftRemap()
+{
+  // Landscape-left: phone rotated 90° CCW from portrait (top of phone on left).
+  // This matrix transforms from portrait device axes to landscape device axes.
+  // When multiplied as R_dc_portrait * R_landscape, gives R_dc_landscape.
+  // Portrait -> Landscape: X -> -Y, Y -> X, Z -> Z (90° CW about Z).
+  openMVG::Mat3 R;
+  R << 0.0, -1.0, 0.0,
+       1.0, 0.0, 0.0,
+       0.0, 0.0, 1.0;
+  return R;
+}
+
+} // namespace
+
 enum EGeometricModel
 {
   FUNDAMENTAL_MATRIX       = 0,
@@ -55,7 +117,8 @@ enum EGeometricModel
   HOMOGRAPHY_MATRIX        = 2,
   ESSENTIAL_MATRIX_ANGULAR = 3,
   ESSENTIAL_MATRIX_ORTHO   = 4,
-  ESSENTIAL_MATRIX_UPRIGHT = 5
+  ESSENTIAL_MATRIX_UPRIGHT = 5,
+  ESSENTIAL_MATRIX_IMU     = 6
 };
 
 /// Compute corresponding features between a series of views:
@@ -93,6 +156,9 @@ int main( int argc, char** argv )
   double prior_weight = 1.0; // weight of prior penalty
   double heading_max = 140.0; // max allowed heading difference
   int    spot_sample_size = 15; // number of points to spot-check
+  int    min_inliers = 0;       // min inlier count per pair
+  double dPrecision = 32.0;     // max pixel error (Stage 1 RANSAC)
+  double dRecoveryPrecision = 4.0; // max pixel error (Stage 3 Recovery)
 
   //required
   cmd.add( make_option( 'i', sSfM_Data_Filename, "input_file" ) );
@@ -114,6 +180,9 @@ int main( int argc, char** argv )
   cmd.add( make_option( 'w', prior_weight, "prior_weight" ) );
   cmd.add( make_option( 'H', heading_max, "heading_max" ) );
   cmd.add( make_option( 'S', spot_sample_size, "spot_sample_size" ) );
+  cmd.add( make_option( 'M', min_inliers, "min_inliers" ) );
+  cmd.add( make_option( 't', dPrecision, "precision" ) );
+  cmd.add( make_option( 'T', dRecoveryPrecision, "recovery_precision" ) );
 
   try
   {
@@ -139,6 +208,7 @@ int main( int argc, char** argv )
                      << "   a: essential matrix with an angular parametrization,\n"
                      << "   u: upright essential matrix with an angular parametrization,\n"
                      << "   o: orthographic essential matrix.\n"
+                     << "   i: IMU-guided 2-point essential matrix (requires IMU data in EXIF).\n"
                      << "[-r|--guided_matching]  Use the found model to improve the pairwise correspondences.\n"
                      << "[-c|--cache_size]\n"
                      << "  Use a regions cache (only cache_size regions will be stored in memory)\n"
@@ -150,7 +220,10 @@ int main( int argc, char** argv )
                      << "[-a|--alt_tol]          Altitude (ty) tolerance (default: 0.2)\n"
                      << "[-w|--prior_weight]     Weight of prior penalty in RANSAC (default: 1.0)\n"
                      << "[-H|--heading_max]      Max allowed heading difference (default: 140.0, 180.0 to disable)\n"
-                     << "[-S|--spot_sample_size] Number of points to spot-check (default: 15, 0 to disable)";
+                     << "[-S|--spot_sample_size] Number of points to spot-check (default: 15, 0 to disable)\n"
+                     << "[-M|--min_inliers]      Min inlier count to keep a pair (default: 0)\n"
+                     << "[-t|--precision]        Max pixel error for RANSAC (default: 4.0)\n"
+                     << "[-T|--recovery_precision] Max pixel error for recovery stage (default: 0.0 for Auto)";
 
     OPENMVG_LOG_INFO << s;
     return EXIT_FAILURE;
@@ -178,7 +251,10 @@ int main( int argc, char** argv )
                     << "--alt_tol            " << alt_tol << "\n"
                     << "--prior_weight       " << prior_weight << "\n"
                     << "--heading_max        " << heading_max << "\n"
-                    << "--spot_sample_size   " << spot_sample_size;
+                    << "--spot_sample_size   " << spot_sample_size << "\n"
+                    << "--min_inliers        " << min_inliers << "\n"
+                    << "--precision          " << dPrecision << "\n"
+                    << "--recovery_precision " << dRecoveryPrecision;
 
   if ( sFilteredMatchesFilename.empty() )
   {
@@ -226,9 +302,18 @@ int main( int argc, char** argv )
     case 'o':
       eGeometricModelToCompute = ESSENTIAL_MATRIX_ORTHO;
       break;
+    case 'i':
+      eGeometricModelToCompute = ESSENTIAL_MATRIX_IMU;
+      break;
     default:
       OPENMVG_LOG_ERROR << "Unknown geometric model";
       return EXIT_FAILURE;
+  }
+
+  // Set default iterations for IMU if not specified by user
+  if (eGeometricModelToCompute == ESSENTIAL_MATRIX_IMU && !cmd.used('I'))
+  {
+    imax_iteration = 64;
   }
 
   // -----------------------------
@@ -252,7 +337,12 @@ int main( int argc, char** argv )
   //---------------------------------------
   // Cache EXIF headings for motion priors
   //---------------------------------------
+  //---------------------------------------
+  // Cache EXIF data for motion priors
+  //---------------------------------------
   std::map<IndexT, double> map_headings;
+  std::map<IndexT, Mat3> map_imu_rotations;
+
   if (eGeometricModelToCompute == ESSENTIAL_MATRIX)
   {
     OPENMVG_LOG_INFO << "Caching GPS headings for motion priors...";
@@ -291,6 +381,31 @@ int main( int argc, char** argv )
         }
       }
     }
+  }
+
+  if (eGeometricModelToCompute == ESSENTIAL_MATRIX_IMU)
+  {
+    OPENMVG_LOG_INFO << "Caching IMU rotations for guided matching...";
+    const Mat3 R_cd = DeviceToCameraRotation();
+    const Mat3 R_landscape = DeviceLandscapeLeftRemap();
+    for (const auto & view_ptr : sfm_data.GetViews())
+    {
+      const std::string image_path = stlplus::folder_append_separator(sfm_data.s_root_path) + view_ptr.second->s_Img_path;
+      std::unique_ptr<openMVG::exif::Exif_IO> exifIO(new openMVG::exif::Exif_IO_EasyExif(image_path));
+      
+      std::string user_comment;
+      if (!exifIO->UserComment(&user_comment))
+        continue;
+
+      Mat3 R_dw;
+      if (!ParseImuRotationFromUserComment(user_comment, R_dw))
+        continue;
+
+      // Convert Device->World (ENU) to World->Camera (OpenMVG axes)
+      const Mat3 R_wc = R_cd * R_landscape * R_dw.transpose();
+      map_imu_rotations[view_ptr.first] = R_wc;
+    }
+    OPENMVG_LOG_INFO << "Loaded IMU rotations for " << map_imu_rotations.size() << " / " << sfm_data.GetViews().size() << " images.";
   }
 
   //---------------------------------------
@@ -339,11 +454,14 @@ int main( int argc, char** argv )
   //---------------------------------------
   // A. Load initial matches
   //---------------------------------------
+  OPENMVG_LOG_INFO << "Loading putative matches from: " << sPutativeMatchesFilename;
   if ( !Load( map_PutativeMatches, sPutativeMatchesFilename ) )
   {
     OPENMVG_LOG_ERROR << "Failed to load the initial matches file.";
     return EXIT_FAILURE;
   }
+  OPENMVG_LOG_INFO << "Loaded " << map_PutativeMatches.size() << " putative matching pairs.";
+
 
   if ( !sInputPairsFilename.empty() )
   {
@@ -355,7 +473,9 @@ int main( int argc, char** argv )
     // Filter matches with the given pairs
     OPENMVG_LOG_INFO << "Filtering matches with the given pairs.";
     map_PutativeMatches = getPairs( map_PutativeMatches, input_pairs );
+    OPENMVG_LOG_INFO << "Number of putative pairs after input-pair filtering: " << map_PutativeMatches.size();
   }
+
 
   //---------------------------------------
   // b. Geometric filtering of putative matches
@@ -410,31 +530,23 @@ int main( int argc, char** argv )
         prior_config.spot_sample_size = spot_sample_size;
 
         filter_ptr->Robust_model_estimation(
-            GeometricFilter_EMatrix_AC_WithPriors( 4.0, imax_iteration, prior_config, &map_headings, map_PutativeMatches.size() ),
+            GeometricFilter_EMatrix_AC_WithPriors( dPrecision, imax_iteration, prior_config, &map_headings, map_PutativeMatches.size(), (size_t)min_inliers ),
             map_PutativeMatches,
             bGuided_matching,
             d_distance_ratio,
             &progress );
         map_GeometricMatches = filter_ptr->Get_geometric_matches();
-
-        //-- Perform an additional check to remove pairs with poor overlap
-        std::vector<PairWiseMatches::key_type> vec_toRemove;
-        for ( const auto& pairwisematches_it : map_GeometricMatches )
-        {
-          const size_t putativePhotometricCount = map_PutativeMatches.find( pairwisematches_it.first )->second.size();
-          const size_t putativeGeometricCount   = pairwisematches_it.second.size();
-          const float  ratio                    = putativeGeometricCount / static_cast<float>( putativePhotometricCount );
-          if ( putativeGeometricCount < 50 || ratio < .3f )
-          {
-            // the pair will be removed
-            vec_toRemove.push_back( pairwisematches_it.first );
-          }
-        }
-        //-- remove discarded pairs
-        for ( const auto& pair_to_remove_it : vec_toRemove )
-        {
-          map_GeometricMatches.erase( pair_to_remove_it );
-        }
+      }
+      break;
+      case ESSENTIAL_MATRIX_IMU:
+      {
+        filter_ptr->Robust_model_estimation(
+            GeometricFilter_EMatrix_AC_Imu( dPrecision, imax_iteration, &map_imu_rotations, map_PutativeMatches.size(), (size_t)min_inliers, dRecoveryPrecision ),
+            map_PutativeMatches,
+            bGuided_matching,
+            d_distance_ratio,
+            &progress );
+        map_GeometricMatches = filter_ptr->Get_geometric_matches();
       }
       break;
       case ESSENTIAL_MATRIX_ANGULAR:
@@ -482,6 +594,17 @@ int main( int argc, char** argv )
     OPENMVG_LOG_INFO << "\n=== Geometric Filtering Summary ===";
     OPENMVG_LOG_INFO << "Putative pairs:  " << map_PutativeMatches.size();
     OPENMVG_LOG_INFO << "Geometric pairs: " << map_GeometricMatches.size();
+
+    if (eGeometricModelToCompute == ESSENTIAL_MATRIX_IMU)
+    {
+      OPENMVG_LOG_INFO << "\nIMU Configuration:";
+      OPENMVG_LOG_INFO << "  IMU rotations loaded: " << map_imu_rotations.size() << " / " << sfm_data.GetViews().size();
+      if (map_GeometricMatches.empty() && !map_PutativeMatches.empty())
+      {
+        OPENMVG_LOG_WARNING << "\n*** WARNING: All pairs were filtered out! ***";
+        OPENMVG_LOG_WARNING << "This may indicate that IMU data is noisy or incorrectly aligned.";
+      }
+    }
 
     if (eGeometricModelToCompute == ESSENTIAL_MATRIX)
     {
