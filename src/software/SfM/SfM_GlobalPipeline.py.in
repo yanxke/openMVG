@@ -48,7 +48,7 @@ parser.add_argument("-ri", "--ransac_iter", type=int, default=512, help="RANSAC 
 parser.set_defaults(imu_rotation_filter_outliers=True)
 
 # Bundle Adjustment refinement options
-parser.add_argument("-f", "--refine_intrinsics", type=str, default="NONE",
+parser.add_argument("-f", "--refine_intrinsics", type=str, default="ADJUST_ALL",
                     help="Intrinsics refinement: ADJUST_ALL (default), NONE, ADJUST_FOCAL_LENGTH, "
                          "ADJUST_PRINCIPAL_POINT, ADJUST_DISTORTION, or combinations with |")
 

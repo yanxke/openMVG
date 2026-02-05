@@ -286,7 +286,8 @@ bool CreateImageFile( const SfM_Data & sfm_data,
 
 bool CreatePoint3DFile( const SfM_Data & sfm_data,
                       const std::string & sPoints3DFilename,
-                      const int& floating_point_precision_digit)
+                      const int& floating_point_precision_digit,
+                      const bool& b_colorize_tracks)
 {
  /* points3D.txt
       # 3D point list with one line of data per point:
@@ -309,8 +310,13 @@ bool CreatePoint3DFile( const SfM_Data & sfm_data,
   const Landmarks & landmarks = sfm_data.GetLandmarks();
 
   std::vector<Vec3> vec_3dPoints, vec_tracksColor;
-  if (!ColorizeTracks(sfm_data, vec_3dPoints, vec_tracksColor)) {
-    return false;
+  if (b_colorize_tracks) {
+    if (!ColorizeTracks(sfm_data, vec_3dPoints, vec_tracksColor)) {
+      return false;
+    }
+  } else {
+    // Use default gray color (128, 128, 128) when colorization is disabled
+    vec_tracksColor.resize(landmarks.size(), Vec3(128, 128, 128));
   }
 
   system::LoggerProgress my_progress_bar( landmarks.size(), "- CREATE POINT3D FILE  -" );
@@ -362,16 +368,17 @@ bool CreatePoint3DFile( const SfM_Data & sfm_data,
 bool CreateColmapFolder( const SfM_Data & sfm_data,
                     const std::string & sOutDirectory,
                     const std::string & sCamerasFilename,
-                    const std::string & sImagesFilename, 
+                    const std::string & sImagesFilename,
                     const std::string & sPoints3DFilename,
-                    const int& floating_point_precision_digit)
+                    const int& floating_point_precision_digit,
+                    const bool& b_colorize_tracks)
 {
   /* Colmap Output structure:
       cameras.txt
       images.txt
       points3D.txt
   */
-  if (!CreateCameraFile(sfm_data, sCamerasFilename, floating_point_precision_digit)) 
+  if (!CreateCameraFile(sfm_data, sCamerasFilename, floating_point_precision_digit))
   {
     return false;
   }
@@ -379,7 +386,7 @@ bool CreateColmapFolder( const SfM_Data & sfm_data,
   {
     return false;
   }
-  if (! CreatePoint3DFile(sfm_data, sPoints3DFilename, floating_point_precision_digit))
+  if (! CreatePoint3DFile(sfm_data, sPoints3DFilename, floating_point_precision_digit, b_colorize_tracks))
   {
     return false;
   }
@@ -391,7 +398,7 @@ bool CreateColmapFolder( const SfM_Data & sfm_data,
 * @param sfm_data Structure from Motion file to export
 * @param sOutDirectory Output directory
 */
-bool exportToColmap( const SfM_Data & sfm_data , const std::string & sOutDirectory , const int& floating_point_precision_digit)
+bool exportToColmap( const SfM_Data & sfm_data , const std::string & sOutDirectory , const int& floating_point_precision_digit, const bool& b_colorize_tracks)
 {
   // Create output directory
   bool bOk = false;
@@ -414,7 +421,7 @@ bool exportToColmap( const SfM_Data & sfm_data , const std::string & sOutDirecto
   const std::string sCamerasFilename = stlplus::create_filespec( sOutDirectory , "cameras.txt" );
   const std::string sImagesFilename = stlplus::create_filespec( sOutDirectory , "images.txt" );
   const std::string sPoints3DFilename = stlplus::create_filespec( sOutDirectory , "points3D.txt" );
-  if ( ! CreateColmapFolder( sfm_data , sOutDirectory , sCamerasFilename, sImagesFilename, sPoints3DFilename, floating_point_precision_digit) )
+  if ( ! CreateColmapFolder( sfm_data , sOutDirectory , sCamerasFilename, sImagesFilename, sPoints3DFilename, floating_point_precision_digit, b_colorize_tracks) )
   {
     OPENMVG_LOG_ERROR << "There was an error exporting project";
     return false;
@@ -430,10 +437,12 @@ int main( int argc , char ** argv )
   std::string sSfM_Data_Filename;
   std::string sOutDir = "";
   int floating_point_precision_digit = 16;
+  bool b_colorize_tracks = true;
 
   cmd.add( make_option( 'i', sSfM_Data_Filename, "sfmdata" ) );
   cmd.add( make_option( 'o', sOutDir, "outdir" ) );
   cmd.add(make_option('p', floating_point_precision_digit, "precision"));
+  cmd.add(make_option('c', b_colorize_tracks, "colorize"));
 
   OPENMVG_LOG_INFO << "Note: this program writes output in Colmap file format.\n";
 
@@ -447,12 +456,13 @@ int main( int argc , char ** argv )
   }
   catch ( const std::string& s )
   {
-    OPENMVG_LOG_INFO 
+    OPENMVG_LOG_INFO
               << "Usage: " << argv[0] << '\n'
               << "[-i|--sfmdata] filename, the SfM_Data file to convert\n"
               << "[-o|--outdir] path where cameras.txt, images.txt and points3D.txt will be saved"
               << "\n[Optional]\n"
-              << "[-p|--precision] sets the decimal precision to be used to format floating-point values (default = "<<floating_point_precision_digit<< ")";
+              << "[-p|--precision] sets the decimal precision to be used to format floating-point values (default = "<<floating_point_precision_digit<< ")\n"
+              << "[-c|--colorize] enable track colorization from images (default = 1, set to 0 to disable)";
     OPENMVG_LOG_ERROR << s;
     return EXIT_FAILURE;
   }
@@ -477,7 +487,7 @@ int main( int argc , char ** argv )
     floating_point_precision_digit = 6;
   }
 
-  if ( ! exportToColmap( sfm_data , sOutDir , floating_point_precision_digit) )
+  if ( ! exportToColmap( sfm_data , sOutDir , floating_point_precision_digit, b_colorize_tracks) )
   {
     OPENMVG_LOG_ERROR << "There was an error during export of the file";
     return EXIT_FAILURE;
