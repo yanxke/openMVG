@@ -437,7 +437,7 @@ int main( int argc , char ** argv )
   std::string sSfM_Data_Filename;
   std::string sOutDir = "";
   int floating_point_precision_digit = 16;
-  bool b_colorize_tracks = true;
+  bool b_colorize_tracks = false;
 
   cmd.add( make_option( 'i', sSfM_Data_Filename, "sfmdata" ) );
   cmd.add( make_option( 'o', sOutDir, "outdir" ) );
@@ -462,7 +462,7 @@ int main( int argc , char ** argv )
               << "[-o|--outdir] path where cameras.txt, images.txt and points3D.txt will be saved"
               << "\n[Optional]\n"
               << "[-p|--precision] sets the decimal precision to be used to format floating-point values (default = "<<floating_point_precision_digit<< ")\n"
-              << "[-c|--colorize] enable track colorization from images (default = 1, set to 0 to disable)";
+              << "[-c|--colorize] enable track colorization from images (default = 0, set to 1 to enable)";
     OPENMVG_LOG_ERROR << s;
     return EXIT_FAILURE;
   }

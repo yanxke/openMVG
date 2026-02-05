@@ -277,6 +277,7 @@ int main(int argc, char **argv)
   double imu_rotation_max_error = 45.0;
   double imu_rotation_histogram_bucket = 10.0;
   bool imu_rotation_filter_outliers = true;
+  std::string intrinsics_file = "";
 
 
   // Common options
@@ -310,6 +311,7 @@ int main(int argc, char **argv)
   cmd.add( make_option('U', imu_rotation_max_error, "imu_rotation_max_error") );
   cmd.add( make_option('H', imu_rotation_histogram_bucket, "imu_rotation_histogram_bucket") );
   cmd.add( make_option('q', imu_rotation_filter_outliers, "imu_rotation_filter_outliers") );
+  cmd.add( make_option('I', intrinsics_file, "intrinsics_file") );
   // Stellar SfM
   std::string graph_simplification = "MST_X";
   int graph_simplification_value = 5;
@@ -418,6 +420,7 @@ int main(int argc, char **argv)
       << "\t[-H|--imu_rotation_histogram_bucket] Histogram bucket size in degrees (default: " << imu_rotation_histogram_bucket << ")\n"
       << "\t[-q|--imu_rotation_filter_outliers] Remove IMU priors above max error and rerun rotation averaging "
       << "(default: " << (imu_rotation_filter_outliers ? "true" : "false") << ", set to 0 to disable)\n"
+      << "\t[-I|--intrinsics_file] Load pre-calibrated intrinsics from file (disables intrinsic optimization)\n"
       << "[STELLAR]\n"
       << "\t[-G|--graph_simplification]\n"
       << "\t\t -> NONE\n"
@@ -697,6 +700,7 @@ int main(int argc, char **argv)
       imu_rotation_filter_outliers,
       imu_rotation_max_error,
       imu_rotation_histogram_bucket);
+    engine->SetIntrinsicsFile(intrinsics_file);
 
     sfm_engine.reset(engine);
   }
