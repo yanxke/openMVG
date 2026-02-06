@@ -389,10 +389,8 @@ bool GlobalSfMReconstructionEngine_RelativeMotions::Process() {
           // Copy loaded intrinsics to current sfm_data
           sfm_data_.intrinsics = intrinsics_data.intrinsics;
           intrinsics_loaded_from_file_ = true;
-          intrinsics_use_reduced_iterations_ = true;  // Signal to use reduced iterations for K+R+T
           OPENMVG_LOG_INFO << "Loaded " << sfm_data_.intrinsics.size() << " camera intrinsics from file";
-          OPENMVG_LOG_INFO << "K+R+T stage will run with reduced iterations (1/10, minimum 5).";
-          OPENMVG_LOG_INFO << "Final BA will include intrinsics in optimization.";
+          OPENMVG_LOG_INFO << "K+R+T stage will refine loaded intrinsics during BA.";
 
           // Do NOT set intrinsic_refinement_options_ to NONE - keep existing value to include intrinsics in BA
         }
@@ -985,27 +983,13 @@ bool GlobalSfMReconstructionEngine_RelativeMotions::Adjust()
     }
   }
 
-  // Run K+R+T stage if intrinsics should be refined OR if loaded from file (with reduced iterations)
-  if (b_BA_Status &&
-      (ReconstructionEngine::intrinsic_refinement_options_ != Intrinsic_Parameter_Type::NONE ||
-       intrinsics_use_reduced_iterations_)) {
+  // Run K+R+T stage if intrinsics should be refined
+  if (b_BA_Status && ReconstructionEngine::intrinsic_refinement_options_ != Intrinsic_Parameter_Type::NONE) {
     // - refine all: Structure, motion:{rotations, translations} and optics:{intrinsics}
-    // Save original iteration count and apply reduction if intrinsics were loaded from file
-    const int original_max_iterations = bundle_adjustment_obj.ceres_options().max_num_iterations_;
-    if (intrinsics_use_reduced_iterations_) {
-      const int reduced_iterations = std::max(5, original_max_iterations / 10);
-      bundle_adjustment_obj.ceres_options().max_num_iterations_ = reduced_iterations;
-      OPENMVG_LOG_INFO << "Bundle adjustment: refine intrinsics + motion + structure..."
-               << " (REDUCED iterations: " << reduced_iterations << " instead of " << original_max_iterations << ")"
-               << " (motion priors " << (this->b_use_motion_prior_ ? "enabled" : "disabled")
-               << ", view_priors=" << view_priors_count
-               << ", pose_center_prior=" << pose_center_prior_count << ")";
-    } else {
-      OPENMVG_LOG_INFO << "Bundle adjustment: refine intrinsics + motion + structure..."
-               << " (motion priors " << (this->b_use_motion_prior_ ? "enabled" : "disabled")
-               << ", view_priors=" << view_priors_count
-               << ", pose_center_prior=" << pose_center_prior_count << ")";
-    }
+    OPENMVG_LOG_INFO << "Bundle adjustment: refine intrinsics + motion + structure..."
+             << " (motion priors " << (this->b_use_motion_prior_ ? "enabled" : "disabled")
+             << ", view_priors=" << view_priors_count
+             << ", pose_center_prior=" << pose_center_prior_count << ")";
     bundle_adjustment_obj.ceres_options().progress_modulo_ = 2;
     bundle_adjustment_obj.ceres_options().progress_label_ = "K + R + T + X";
     b_BA_Status = bundle_adjustment_obj.Adjust
@@ -1018,10 +1002,6 @@ bool GlobalSfMReconstructionEngine_RelativeMotions::Adjust()
           Control_Point_Parameter(),
           this->b_use_motion_prior_)
       );
-    // Restore original iteration count for subsequent BA stages
-    if (intrinsics_use_reduced_iterations_) {
-      bundle_adjustment_obj.ceres_options().max_num_iterations_ = original_max_iterations;
-    }
     if (b_BA_Status && !sLogging_file_.empty())
     {
       Save(sfm_data_,

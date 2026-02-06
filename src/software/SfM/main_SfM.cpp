@@ -411,7 +411,7 @@ int main(int argc, char **argv)
       << "\t[-H|--imu_rotation_histogram_bucket] Histogram bucket size in degrees (default: " << imu_rotation_histogram_bucket << ")\n"
       << "\t[-q|--imu_rotation_filter_outliers] Remove IMU priors above max error and rerun rotation averaging "
       << "(default: " << (imu_rotation_filter_outliers ? "true" : "false") << ", set to 0 to disable)\n"
-      << "\t[-I|--intrinsics_file] Load pre-calibrated intrinsics from file (K+R+T stage runs with reduced iterations)\n"
+      << "\t[-I|--intrinsics_file] Load pre-calibrated intrinsics from file (will be refined during BA)\n"
       << "[STELLAR]\n"
       << "\t[-G|--graph_simplification]\n"
       << "\t\t -> NONE\n"

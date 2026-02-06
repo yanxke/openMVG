@@ -50,7 +50,7 @@ parser.set_defaults(imu_rotation_filter_outliers=True)
 
 # Bundle Adjustment refinement options
 parser.add_argument("--intrinsics_file", type=str, default="",
-                    help="Load pre-calibrated camera intrinsics from file (K+R+T stage runs with reduced iterations)")
+                    help="Load pre-calibrated camera intrinsics from file (will be refined during BA)")
 
 parser.add_argument("input_dir", help="Input directory containing the images.")
 parser.add_argument("output_dir", help="Output directory where the project files will be saved.")
