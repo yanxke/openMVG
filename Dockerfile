@@ -29,8 +29,18 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y tzdata; 
 # Python deps for pose prior helper
 RUN python3 -m pip install --no-cache-dir piexif
 
+# Accept git short hash as build argument
+ARG GIT_SHORT_HASH=unknown
+
 # Clone the openvMVG repo
 ADD . /opt/openMVG
+
+# Store git short hash for version tracking
+RUN echo "${GIT_SHORT_HASH}" > /opt/GIT_SHORT_HASH.txt && \
+  echo "Git short hash: ${GIT_SHORT_HASH}"
+
+# Store git hash file path as environment variable
+ENV GIT_SHORT_HASH_FILE=/opt/GIT_SHORT_HASH.txt
 
 # Build
 RUN --mount=type=cache,target=/ccache \
