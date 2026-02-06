@@ -904,34 +904,22 @@ bool GlobalSfMReconstructionEngine_RelativeMotions::Adjust()
     }
 
     // - refine only Structure and Rotations & translations
-    if (ba_rotation_steps_ != -1)
-    {
-      OPENMVG_LOG_INFO << "Bundle adjustment: refine rotations + translations + structure..."
-               << " (motion priors " << (this->b_use_motion_prior_ ? "enabled" : "disabled")
-               << ", view_priors=" << view_priors_count
-               << ", pose_center_prior=" << pose_center_prior_count
-               << (ba_rotation_steps_ > 0 ? ", max_steps=" + std::to_string(ba_rotation_steps_) : "") << ")";
-      bundle_adjustment_obj.ceres_options().progress_modulo_ = 5;
-      bundle_adjustment_obj.ceres_options().progress_label_ = "R + T + X";
-      if (ba_rotation_steps_ > 0)
-      {
-        bundle_adjustment_obj.ceres_options().max_num_iterations_ = ba_rotation_steps_;
-      }
-      b_BA_Status = bundle_adjustment_obj.Adjust
-        (
-          sfm_data_,
-          Optimize_Options(
-            Intrinsic_Parameter_Type::NONE, // Intrinsics are held as constant
-            Extrinsic_Parameter_Type::ADJUST_ALL,
-            Structure_Parameter_Type::ADJUST_ALL,
-            Control_Point_Parameter(),
-            this->b_use_motion_prior_)
-        );
-    }
-    else
-    {
-      OPENMVG_LOG_INFO << "Bundle adjustment: skipping rotation refinement stage (disabled by user)";
-    }
+    OPENMVG_LOG_INFO << "Bundle adjustment: refine rotations + translations + structure..."
+             << " (motion priors " << (this->b_use_motion_prior_ ? "enabled" : "disabled")
+             << ", view_priors=" << view_priors_count
+             << ", pose_center_prior=" << pose_center_prior_count << ")";
+    bundle_adjustment_obj.ceres_options().progress_modulo_ = 5;
+    bundle_adjustment_obj.ceres_options().progress_label_ = "R + T + X";
+    b_BA_Status = bundle_adjustment_obj.Adjust
+      (
+        sfm_data_,
+        Optimize_Options(
+          Intrinsic_Parameter_Type::NONE, // Intrinsics are held as constant
+          Extrinsic_Parameter_Type::ADJUST_ALL,
+          Structure_Parameter_Type::ADJUST_ALL,
+          Control_Point_Parameter(),
+          this->b_use_motion_prior_)
+      );
     if (b_BA_Status && !sLogging_file_.empty())
     {
       Save(sfm_data_,
@@ -946,19 +934,14 @@ bool GlobalSfMReconstructionEngine_RelativeMotions::Adjust()
     }
   }
 
-  if (b_BA_Status && ReconstructionEngine::intrinsic_refinement_options_ != Intrinsic_Parameter_Type::NONE && ba_intrinsics_steps_ != -1) {
+  if (b_BA_Status && ReconstructionEngine::intrinsic_refinement_options_ != Intrinsic_Parameter_Type::NONE) {
     // - refine all: Structure, motion:{rotations, translations} and optics:{intrinsics}
     OPENMVG_LOG_INFO << "Bundle adjustment: refine intrinsics + motion + structure..."
              << " (motion priors " << (this->b_use_motion_prior_ ? "enabled" : "disabled")
              << ", view_priors=" << view_priors_count
-             << ", pose_center_prior=" << pose_center_prior_count
-             << (ba_intrinsics_steps_ > 0 ? ", max_steps=" + std::to_string(ba_intrinsics_steps_) : "") << ")";
+             << ", pose_center_prior=" << pose_center_prior_count << ")";
     bundle_adjustment_obj.ceres_options().progress_modulo_ = 2;
     bundle_adjustment_obj.ceres_options().progress_label_ = "K + R + T + X";
-    if (ba_intrinsics_steps_ > 0)
-    {
-      bundle_adjustment_obj.ceres_options().max_num_iterations_ = ba_intrinsics_steps_;
-    }
     b_BA_Status = bundle_adjustment_obj.Adjust
       (
         sfm_data_,
@@ -1017,43 +1000,31 @@ bool GlobalSfMReconstructionEngine_RelativeMotions::Adjust()
   // Final BA. We refine one more time,
   // since some outlier have been removed and so a better solution can be found.
   //--
-  if (ba_final_steps_ != -1)
-  {
-    const Optimize_Options ba_refine_options(
-      ReconstructionEngine::intrinsic_refinement_options_,
-      Extrinsic_Parameter_Type::ADJUST_ALL,  // adjust camera motion
-      Structure_Parameter_Type::ADJUST_ALL,  // adjust scene structure
-      Control_Point_Parameter(),
-      this->b_use_motion_prior_);
+  const Optimize_Options ba_refine_options(
+    ReconstructionEngine::intrinsic_refinement_options_,
+    Extrinsic_Parameter_Type::ADJUST_ALL,  // adjust camera motion
+    Structure_Parameter_Type::ADJUST_ALL,  // adjust scene structure
+    Control_Point_Parameter(),
+    this->b_use_motion_prior_);
 
-    OPENMVG_LOG_INFO << "Bundle adjustment: final refine after outlier removal..."
-                     << " (motion priors " << (this->b_use_motion_prior_ ? "enabled" : "disabled")
-                     << ", view_priors=" << view_priors_count
-                     << ", pose_center_prior=" << pose_center_prior_count
-                     << (ba_final_steps_ > 0 ? ", max_steps=" + std::to_string(ba_final_steps_) : "") << ")";
-    bundle_adjustment_obj.ceres_options().progress_modulo_ = 2;
-    bundle_adjustment_obj.ceres_options().progress_label_ = "final";
-    if (ba_final_steps_ > 0)
-    {
-      bundle_adjustment_obj.ceres_options().max_num_iterations_ = ba_final_steps_;
-    }
-    b_BA_Status = bundle_adjustment_obj.Adjust(sfm_data_, ba_refine_options);
-    if (b_BA_Status && !sLogging_file_.empty())
-    {
-      Save(sfm_data_,
-        stlplus::create_filespec(stlplus::folder_part(sLogging_file_), "structure_04_outlier_removed", "ply"),
-        ESfM_Data(EXTRINSICS | STRUCTURE));
-    }
-    if (b_BA_Status && !sOut_directory_.empty())
-    {
-      const std::string csv_path =
-        stlplus::create_filespec(sOut_directory_, "camera_poses_after_ba_final", "csv");
-      WritePosesCsv(csv_path, sfm_data_);
-    }
-  }
-  else
+  OPENMVG_LOG_INFO << "Bundle adjustment: final refine after outlier removal..."
+                   << " (motion priors " << (this->b_use_motion_prior_ ? "enabled" : "disabled")
+                   << ", view_priors=" << view_priors_count
+                   << ", pose_center_prior=" << pose_center_prior_count << ")";
+  bundle_adjustment_obj.ceres_options().progress_modulo_ = 2;
+  bundle_adjustment_obj.ceres_options().progress_label_ = "final";
+  b_BA_Status = bundle_adjustment_obj.Adjust(sfm_data_, ba_refine_options);
+  if (b_BA_Status && !sLogging_file_.empty())
   {
-    OPENMVG_LOG_INFO << "Bundle adjustment: skipping final refinement stage (disabled by user)";
+    Save(sfm_data_,
+      stlplus::create_filespec(stlplus::folder_part(sLogging_file_), "structure_04_outlier_removed", "ply"),
+      ESfM_Data(EXTRINSICS | STRUCTURE));
+  }
+  if (b_BA_Status && !sOut_directory_.empty())
+  {
+    const std::string csv_path =
+      stlplus::create_filespec(sOut_directory_, "camera_poses_after_ba_final", "csv");
+    WritePosesCsv(csv_path, sfm_data_);
   }
   return b_BA_Status;
 }
