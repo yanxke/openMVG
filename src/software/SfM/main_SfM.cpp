@@ -255,9 +255,6 @@ int main(int argc, char **argv)
   std::string sIntrinsic_refinement_options = "ADJUST_ALL";
   std::string sExtrinsic_refinement_options = "ADJUST_ALL";
   bool b_use_motion_priors = false;
-  int ba_rotation_steps = 0;      // -1=disable, 0=use default, >0=limit steps
-  int ba_intrinsics_steps = 0;    // -1=disable, 0=use default, >0=limit steps
-  int ba_final_steps = 0;         // -1=disable, 0=use default, >0=limit steps
 
   // Incremental SfM options
   int triangulation_method = static_cast<int>(ETriangulationMethod::DEFAULT);
@@ -291,9 +288,6 @@ int main(int argc, char **argv)
   cmd.add( make_option('f', sIntrinsic_refinement_options, "refine_intrinsic_config") );
   cmd.add( make_option('e', sExtrinsic_refinement_options, "refine_extrinsic_config") );
   cmd.add( make_switch('P', "prior_usage") );
-  cmd.add( make_option('X', ba_rotation_steps, "ba_rotation_steps") );
-  cmd.add( make_option('Y', ba_intrinsics_steps, "ba_intrinsics_steps") );
-  cmd.add( make_option('Z', ba_final_steps, "ba_final_steps") );
 
   // Incremental SfM pipeline options
   cmd.add( make_option('t', triangulation_method, "triangulation_method"));
@@ -355,9 +349,6 @@ int main(int argc, char **argv)
       << "\t ADJUST_ALL -> refine all existing parameters (default) \n"
       << "\t NONE -> extrinsic parameters are held as constant\n"
       << "[-P|--prior_usage] Enable usage of motion priors (i.e GPS positions) (default: false)\n"
-      << "[-X|--ba_rotation_steps] BA rotation refinement steps: -1=disable, 0=use default (default), >0=limit steps\n"
-      << "[-Y|--ba_intrinsics_steps] BA intrinsics refinement steps: -1=disable, 0=use default (default), >0=limit steps\n"
-      << "[-Z|--ba_final_steps] Final BA steps: -1=disable, 0=use default (default), >0=limit steps\n"
       << "\n\n"
       << "[Engine specifics]\n"
       << "\n\n"
@@ -735,9 +726,6 @@ int main(int argc, char **argv)
   sfm_engine->Set_Intrinsics_Refinement_Type(intrinsic_refinement_options);
   sfm_engine->Set_Extrinsics_Refinement_Type(extrinsic_refinement_options);
   sfm_engine->Set_Use_Motion_Prior(b_use_motion_priors);
-  sfm_engine->Set_BA_Rotation_Steps(ba_rotation_steps);
-  sfm_engine->Set_BA_Intrinsics_Steps(ba_intrinsics_steps);
-  sfm_engine->Set_BA_Final_Steps(ba_final_steps);
 
   //---------------------------------------
   // Sequential reconstruction process

@@ -954,34 +954,22 @@ bool GlobalSfMReconstructionEngine_RelativeMotions::Adjust()
     }
 
     // - refine only Structure and Rotations & translations
-    if (ba_rotation_steps_ != -1)
-    {
-      OPENMVG_LOG_INFO << "Bundle adjustment: refine rotations + translations + structure..."
-               << " (motion priors " << (this->b_use_motion_prior_ ? "enabled" : "disabled")
-               << ", view_priors=" << view_priors_count
-               << ", pose_center_prior=" << pose_center_prior_count
-               << (ba_rotation_steps_ > 0 ? ", max_steps=" + std::to_string(ba_rotation_steps_) : "") << ")";
-      bundle_adjustment_obj.ceres_options().progress_modulo_ = 5;
-      bundle_adjustment_obj.ceres_options().progress_label_ = "R + T + X";
-      if (ba_rotation_steps_ > 0)
-      {
-        bundle_adjustment_obj.ceres_options().max_num_iterations_ = ba_rotation_steps_;
-      }
-      b_BA_Status = bundle_adjustment_obj.Adjust
-        (
-          sfm_data_,
-          Optimize_Options(
-            Intrinsic_Parameter_Type::NONE, // Intrinsics are held as constant
-            Extrinsic_Parameter_Type::ADJUST_ALL,
-            Structure_Parameter_Type::ADJUST_ALL,
-            Control_Point_Parameter(),
-            this->b_use_motion_prior_)
-        );
-    }
-    else
-    {
-      OPENMVG_LOG_INFO << "Bundle adjustment: skipping rotation refinement stage (disabled by user)";
-    }
+    OPENMVG_LOG_INFO << "Bundle adjustment: refine rotations + translations + structure..."
+             << " (motion priors " << (this->b_use_motion_prior_ ? "enabled" : "disabled")
+             << ", view_priors=" << view_priors_count
+             << ", pose_center_prior=" << pose_center_prior_count << ")";
+    bundle_adjustment_obj.ceres_options().progress_modulo_ = 5;
+    bundle_adjustment_obj.ceres_options().progress_label_ = "R + T + X";
+    b_BA_Status = bundle_adjustment_obj.Adjust
+      (
+        sfm_data_,
+        Optimize_Options(
+          Intrinsic_Parameter_Type::NONE, // Intrinsics are held as constant
+          Extrinsic_Parameter_Type::ADJUST_ALL,
+          Structure_Parameter_Type::ADJUST_ALL,
+          Control_Point_Parameter(),
+          this->b_use_motion_prior_)
+      );
     if (b_BA_Status && !sLogging_file_.empty())
     {
       Save(sfm_data_,
@@ -996,19 +984,14 @@ bool GlobalSfMReconstructionEngine_RelativeMotions::Adjust()
     }
   }
 
-  if (b_BA_Status && ReconstructionEngine::intrinsic_refinement_options_ != Intrinsic_Parameter_Type::NONE && ba_intrinsics_steps_ != -1) {
+  if (b_BA_Status && ReconstructionEngine::intrinsic_refinement_options_ != Intrinsic_Parameter_Type::NONE) {
     // - refine all: Structure, motion:{rotations, translations} and optics:{intrinsics}
     OPENMVG_LOG_INFO << "Bundle adjustment: refine intrinsics + motion + structure..."
              << " (motion priors " << (this->b_use_motion_prior_ ? "enabled" : "disabled")
              << ", view_priors=" << view_priors_count
-             << ", pose_center_prior=" << pose_center_prior_count
-             << (ba_intrinsics_steps_ > 0 ? ", max_steps=" + std::to_string(ba_intrinsics_steps_) : "") << ")";
+             << ", pose_center_prior=" << pose_center_prior_count << ")";
     bundle_adjustment_obj.ceres_options().progress_modulo_ = 2;
     bundle_adjustment_obj.ceres_options().progress_label_ = "K + R + T + X";
-    if (ba_intrinsics_steps_ > 0)
-    {
-      bundle_adjustment_obj.ceres_options().max_num_iterations_ = ba_intrinsics_steps_;
-    }
     b_BA_Status = bundle_adjustment_obj.Adjust
       (
         sfm_data_,

@@ -25,6 +25,7 @@ CAMERA_SENSOR_WIDTH_DIRECTORY = "@OPENMVG_SOFTWARE_SFM_SRC_DIR@" + "/../../openM
 
 import argparse
 from pathlib import Path
+import os
 import subprocess
 import sys
 import time
@@ -48,8 +49,8 @@ parser.add_argument("-ri", "--ransac_iter", type=int, default=512, help="RANSAC 
 parser.set_defaults(imu_rotation_filter_outliers=True)
 
 # Bundle Adjustment refinement options
-parser.add_argument("-f", "--refine_intrinsics", type=str, default="ADJUST_ALL",
-                    help="Intrinsics refinement: ADJUST_ALL (default), NONE, ADJUST_FOCAL_LENGTH, "
+parser.add_argument("-f", "--refine_intrinsics", type=str, default="NONE",
+                    help="Intrinsics refinement: ADJUST_ALL, NONE (default), ADJUST_FOCAL_LENGTH, "
                          "ADJUST_PRINCIPAL_POINT, ADJUST_DISTORTION, or combinations with |")
 parser.add_argument("--intrinsics_file", type=str, default="",
                     help="Load pre-calibrated camera intrinsics from file (disables intrinsic optimization)")
@@ -119,7 +120,21 @@ def run_step(title, cmd, log_file):
   return elapsed
 with open(log_path, "a") as log_file:
   log_file.write("Pipeline log for: {}\n".format(time.ctime()))
-  log_file.write("Input dir: {}\nOutput dir: {}\n\n".format(input_dir, output_dir))
+  log_file.write("Input dir: {}\nOutput dir: {}\n".format(input_dir, output_dir))
+
+  # Print git short hash for version tracking
+  git_hash = "unknown"
+  git_hash_file = os.environ.get("GIT_SHORT_HASH_FILE")
+  if git_hash_file and os.path.exists(git_hash_file):
+    try:
+      with open(git_hash_file, "r") as f:
+        git_hash = f.read().strip()
+    except:
+      pass
+
+  git_info = "Git short hash: {}\n\n".format(git_hash)
+  print(git_info.strip())
+  log_file.write(git_info)
   log_file.flush()
 
   run_step("1. Intrinsics analysis",
