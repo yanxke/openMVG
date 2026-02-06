@@ -15,6 +15,7 @@
 #include "third_party/stlplus3/filesystemSimplified/file_system.hpp"
 
 #include <iostream>
+#include <iomanip>
 #include <cmath>
 
 /**
@@ -45,7 +46,7 @@ void usage( const char* argv0 )
             << "       X: will match 0 with (1->X), ...]\n"
             << "       2: will match 0 with (1,2), 1 with (2,3), ...\n"
             << "       3: will match 0 with (1,2,3), 1 with (2,3,4), ...\n"
-            << "[-h|--heading_threshold] T Maximum heading difference in degrees (default: 90.0, used with COMPASS mode)\n"
+            << "[-h|--heading_threshold] T Maximum heading difference in degrees (default: 120.0, used with COMPASS mode)\n"
             << std::endl;
 }
 
@@ -58,7 +59,7 @@ int main( int argc, char** argv )
   std::string sOutputPairsFilename;
   std::string sPairMode        = "EXHAUSTIVE";
   int         iContiguousCount = -1;
-  double      dHeadingThreshold = 90.0;
+  double      dHeadingThreshold = 120.0;
 
   // Mandatory elements:
   cmd.add( make_option( 'i', sSfMDataFilename, "input_file" ) );
@@ -224,7 +225,9 @@ int main( int argc, char** argv )
           }
         }
 
-        std::cout << "Generated " << pairs.size() << " pairs (rejected " << rejected << " based on heading)" << std::endl;
+        const size_t total = pairs.size() + rejected;
+        const double rejection_ratio = total > 0 ? (100.0 * rejected / total) : 0.0;
+        std::cout << "Generated " << pairs.size() << " pairs (rejected " << rejected << " based on heading, ratio rejected: " << std::fixed << std::setprecision(1) << rejection_ratio << "%)" << std::endl;
       }
       break;
     }
