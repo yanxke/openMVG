@@ -49,9 +49,6 @@ parser.add_argument("-ri", "--ransac_iter", type=int, default=512, help="RANSAC 
 parser.set_defaults(imu_rotation_filter_outliers=True)
 
 # Bundle Adjustment refinement options
-parser.add_argument("-f", "--refine_intrinsics", type=str, default="NONE",
-                    help="Intrinsics refinement: ADJUST_ALL, NONE (default), ADJUST_FOCAL_LENGTH, "
-                         "ADJUST_PRINCIPAL_POINT, ADJUST_DISTORTION, or combinations with |")
 parser.add_argument("--intrinsics_file", type=str, default="",
                     help="Load pre-calibrated camera intrinsics from file (disables intrinsic optimization)")
 
@@ -190,7 +187,7 @@ with open(log_path, "a") as log_file:
   # Create the reconstruction if not present
   reconstruction_dir.mkdir(parents=True, exist_ok=True)
 
-  # Build Global reconstruction command with BA options
+  # Build Global reconstruction command
   global_recon_cmd = [
     str(Path(OPENMVG_SFM_BIN) / "openMVG_main_SfM"),
     "--sfm_engine", "GLOBAL",
@@ -199,7 +196,6 @@ with open(log_path, "a") as log_file:
     "--output_dir", str(reconstruction_dir),
     "--rotationAveraging", "1",
     "-P",
-    "--refine_intrinsic_config", args.refine_intrinsics,
     "--imu_rotation_weight", str(args.imu_rotation_weight),
     "--imu_rotation_max_error", str(args.imu_rotation_max_error),
     "--imu_rotation_histogram_bucket", str(args.imu_rotation_histogram_bucket),
