@@ -55,14 +55,6 @@ parser.add_argument("-f", "--refine_intrinsics", type=str, default="NONE",
 parser.add_argument("--intrinsics_file", type=str, default="",
                     help="Load pre-calibrated camera intrinsics from file (disables intrinsic optimization)")
 
-# Bundle Adjustment control options (-1=disable, 0=use default, >0=limit steps)
-parser.add_argument("--ba_rotation_steps", type=int, default=0,
-                    help="BA rotation refinement steps: -1=disable, 0=use default, >0=limit steps.")
-parser.add_argument("--ba_intrinsics_steps", type=int, default=0,
-                    help="BA intrinsics refinement steps: -1=disable, 0=use default, >0=limit steps.")
-parser.add_argument("--ba_final_steps", type=int, default=0,
-                    help="Final BA steps: -1=disable, 0=use default, >0=limit steps.")
-
 parser.add_argument("input_dir", help="Input directory containing the images.")
 parser.add_argument("output_dir", help="Output directory where the project files will be saved.")
 
@@ -217,17 +209,6 @@ with open(log_path, "a") as log_file:
   # Add intrinsics file if specified
   if args.intrinsics_file:
     global_recon_cmd.extend(["--intrinsics_file", args.intrinsics_file])
-
-  # Add BA control parameters
-  # -1 = disable, 0 = use default (don't pass param), >0 = limit steps
-  if args.ba_rotation_steps != 0:
-    global_recon_cmd.extend(["--ba_rotation_steps", str(args.ba_rotation_steps)])
-
-  if args.ba_intrinsics_steps != 0:
-    global_recon_cmd.extend(["--ba_intrinsics_steps", str(args.ba_intrinsics_steps)])
-
-  if args.ba_final_steps != 0:
-    global_recon_cmd.extend(["--ba_final_steps", str(args.ba_final_steps)])
 
   run_step("6. Do Global reconstruction", global_recon_cmd, log_file)
 
