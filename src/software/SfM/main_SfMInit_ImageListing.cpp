@@ -95,18 +95,25 @@ bool ParseXmpStepCounter(const std::string & filename, int & step_counter)
   std::string content(buffer.data(), bytes_read);
 
   // Look for stepsSinceTaskStart in XMP data
+  // Format: sc:stepsSinceTaskStart="1062"
   const std::string key = "stepsSinceTaskStart";
   size_t pos = content.find(key);
+
   if (pos == std::string::npos)
     return false;
 
-  // Find the value after the key (format: <prefix:stepsSinceTaskStart>VALUE</prefix:stepsSinceTaskStart>)
-  pos = content.find('>', pos);
+  // Find the value after the key (format: stepsSinceTaskStart="VALUE")
+  // Move to the end of the key
+  pos += key.length();
+
+  // Find the opening quote
+  pos = content.find('"', pos);
   if (pos == std::string::npos)
     return false;
-  pos++; // Move past '>'
+  pos++; // Move past opening quote
 
-  size_t end_pos = content.find('<', pos);
+  // Find the closing quote
+  size_t end_pos = content.find('"', pos);
   if (end_pos == std::string::npos)
     return false;
 
