@@ -97,7 +97,21 @@ def run_step(title, cmd, log_file):
   return elapsed
 with open(log_path, "a") as log_file:
   log_file.write("Pipeline log for: {}\n".format(time.ctime()))
-  log_file.write("Input dir: {}\nOutput dir: {}\n\n".format(input_dir, output_dir))
+  log_file.write("Input dir: {}\nOutput dir: {}\n".format(input_dir, output_dir))
+
+  # Print git short hash for version tracking
+  git_hash = "unknown"
+  git_hash_file = os.environ.get("GIT_SHORT_HASH_FILE")
+  if git_hash_file and os.path.exists(git_hash_file):
+    try:
+      with open(git_hash_file, "r") as f:
+        git_hash = f.read().strip()
+    except:
+      pass
+
+  git_info = "Git short hash: {}\n\n".format(git_hash)
+  print(git_info.strip())
+  log_file.write(git_info)
   log_file.flush()
 
   run_step("1. Intrinsics analysis",
