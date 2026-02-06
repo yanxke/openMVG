@@ -68,6 +68,16 @@ bool ParseImuRotationFromUserComment(const std::string & comment, openMVG::Mat3 
   if (vals.size() < 9)
     return false;
 
+  // Validate all values are finite (not NaN or Inf)
+  for (const double& val : vals)
+  {
+    if (!std::isfinite(val))
+    {
+      std::cerr << "Warning: IMU rotation contains non-finite value, ignoring" << std::endl;
+      return false;
+    }
+  }
+
   rotation_dw << vals[0], vals[1], vals[2],
                   vals[3], vals[4], vals[5],
                   vals[6], vals[7], vals[8];
