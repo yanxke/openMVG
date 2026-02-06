@@ -107,6 +107,7 @@ private:
   // Intrinsics file for save/load
   std::string intrinsics_file_path_;
   bool intrinsics_loaded_from_file_ = false;
+  bool intrinsics_use_reduced_iterations_ = false;  // Track if K+R+T should use reduced iterations
 
   //-- Data provider
   Features_Provider  * features_provider_;
