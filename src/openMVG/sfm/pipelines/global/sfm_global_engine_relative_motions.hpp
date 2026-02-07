@@ -50,6 +50,8 @@ public:
     double max_error_deg,
     double histogram_bucket_deg);
 
+  void SetIntrinsicsFile(const std::string& intrinsics_file);
+
   bool Process() override;
 
 protected:
@@ -101,6 +103,10 @@ private:
 
   Hash_Map<IndexT, Mat3> imu_pose_rotations_;
   bool imu_rotations_loaded_ = false;
+
+  // Intrinsics file for save/load
+  std::string intrinsics_file_path_;
+  bool intrinsics_loaded_from_file_ = false;
 
   //-- Data provider
   Features_Provider  * features_provider_;

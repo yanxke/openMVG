@@ -355,7 +355,56 @@ void GlobalSfMReconstructionEngine_RelativeMotions::SetImuRotationPrior(
   imu_rotation_histogram_bucket_deg_ = histogram_bucket_deg;
 }
 
+void GlobalSfMReconstructionEngine_RelativeMotions::SetIntrinsicsFile(const std::string& intrinsics_file)
+{
+  intrinsics_file_path_ = intrinsics_file;
+}
+
 bool GlobalSfMReconstructionEngine_RelativeMotions::Process() {
+
+  // Load intrinsics from file if specified
+  if (!intrinsics_file_path_.empty())
+  {
+    if (!stlplus::file_exists(intrinsics_file_path_))
+    {
+      OPENMVG_LOG_WARNING << "Intrinsics file specified but not found: " << intrinsics_file_path_;
+      OPENMVG_LOG_WARNING << "Continuing with normal intrinsic optimization instead.";
+      intrinsics_file_path_.clear();  // Clear path to prevent save attempts later
+    }
+    else
+    {
+      OPENMVG_LOG_INFO << "Loading camera intrinsics from: " << intrinsics_file_path_;
+      SfM_Data intrinsics_data;
+      if (Load(intrinsics_data, intrinsics_file_path_, ESfM_Data(INTRINSICS)))
+      {
+        // Validate that we actually loaded intrinsics
+        if (intrinsics_data.intrinsics.empty())
+        {
+          OPENMVG_LOG_WARNING << "Intrinsics file is empty or contains no valid intrinsics: " << intrinsics_file_path_;
+          OPENMVG_LOG_WARNING << "Continuing with normal intrinsic optimization instead.";
+          intrinsics_file_path_.clear();  // Clear path to prevent save attempts later
+        }
+        else
+        {
+          // Copy loaded intrinsics to current sfm_data
+          sfm_data_.intrinsics = intrinsics_data.intrinsics;
+          intrinsics_loaded_from_file_ = true;
+          OPENMVG_LOG_INFO << "Loaded " << sfm_data_.intrinsics.size() << " camera intrinsics from file";
+          OPENMVG_LOG_INFO << "K+R+T stage will refine loaded intrinsics during BA.";
+
+          // Do NOT set intrinsic_refinement_options_ to NONE - keep existing value to include intrinsics in BA
+        }
+      }
+      else
+      {
+        OPENMVG_LOG_WARNING << "Failed to load intrinsics from: " << intrinsics_file_path_;
+        OPENMVG_LOG_WARNING << "File may be corrupted or in an invalid format.";
+        OPENMVG_LOG_WARNING << "Continuing with normal intrinsic optimization instead.";
+        intrinsics_file_path_.clear();  // Clear path to prevent save attempts later
+      }
+    }
+  }
+
 
   //-------------------
   // Keep only the largest biedge connected subgraph
@@ -934,6 +983,7 @@ bool GlobalSfMReconstructionEngine_RelativeMotions::Adjust()
     }
   }
 
+  // Run K+R+T stage if intrinsics should be refined
   if (b_BA_Status && ReconstructionEngine::intrinsic_refinement_options_ != Intrinsic_Parameter_Type::NONE) {
     // - refine all: Structure, motion:{rotations, translations} and optics:{intrinsics}
     OPENMVG_LOG_INFO << "Bundle adjustment: refine intrinsics + motion + structure..."
@@ -1025,6 +1075,23 @@ bool GlobalSfMReconstructionEngine_RelativeMotions::Adjust()
     const std::string csv_path =
       stlplus::create_filespec(sOut_directory_, "camera_poses_after_ba_final", "csv");
     WritePosesCsv(csv_path, sfm_data_);
+
+    // Save optimized intrinsics to file (if intrinsics were optimized)
+    if (ReconstructionEngine::intrinsic_refinement_options_ != cameras::Intrinsic_Parameter_Type::NONE)
+    {
+      const std::string intrinsics_save_path =
+        stlplus::create_filespec(sOut_directory_, "optimized_intrinsics", "json");
+      OPENMVG_LOG_INFO << "Saving optimized camera intrinsics to: " << intrinsics_save_path;
+      if (Save(sfm_data_, intrinsics_save_path, ESfM_Data(INTRINSICS)))
+      {
+        OPENMVG_LOG_INFO << "Successfully saved " << sfm_data_.intrinsics.size() << " camera intrinsics";
+        OPENMVG_LOG_INFO << "You can reuse these intrinsics with --intrinsics_file flag";
+      }
+      else
+      {
+        OPENMVG_LOG_WARNING << "Failed to save intrinsics to: " << intrinsics_save_path;
+      }
+    }
   }
   return b_BA_Status;
 }
