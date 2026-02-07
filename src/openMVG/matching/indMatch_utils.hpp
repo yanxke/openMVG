@@ -28,6 +28,12 @@ bool Save
   const std::string & filename
 );
 
+bool SaveJson
+(
+  const PairWiseMatches & matches,
+  const std::string & filename
+);
+
 }  // namespace matching
 }  // namespace openMVG
 

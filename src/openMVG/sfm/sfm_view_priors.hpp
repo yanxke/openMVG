@@ -96,6 +96,18 @@ struct ViewPriors : public View
   bool b_use_pose_rotation_ = false; // Tell if the rotation prior must be used
   double rotation_weight_ = 1.0;
   Mat3 pose_rotation_ = Mat3::Identity();
+
+  // GPS compass heading (degrees, 0-360, clockwise from North)
+  bool b_has_heading_ = false;
+  double gps_heading_ = 0.0;
+
+  // IMU rotation matrix (Device->World in ENU frame)
+  bool b_has_imu_rotation_ = false;
+  Mat3 imu_rotation_ = Mat3::Identity();
+
+  // Step counter from XMP metadata
+  bool b_has_step_counter_ = false;
+  int step_counter_ = 0;
 };
 
 } // namespace sfm
