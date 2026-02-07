@@ -51,41 +51,6 @@ using namespace openMVG::sfm;
 using namespace openMVG::matching_image_collection;
 
 namespace {
-
-bool ParseImuRotationFromUserComment(const std::string & comment, openMVG::Mat3 & rotation_dw)
-{
-  const std::string key = "Rotation:";
-  const std::size_t pos = comment.find(key);
-  if (pos == std::string::npos)
-    return false;
-
-  std::string rot_part = comment.substr(pos + key.size());
-  for (char & c : rot_part)
-  {
-    if (c == '\n' || c == '\r')
-      c = ' ';
-  }
-
-  std::vector<double> vals;
-  vals.reserve(9);
-  std::string token;
-  std::stringstream ss(rot_part);
-  while (std::getline(ss, token, ','))
-  {
-    std::stringstream t(token);
-    double v = 0.0;
-    if (t >> v)
-      vals.push_back(v);
-  }
-  if (vals.size() < 9)
-    return false;
-
-  rotation_dw << vals[0], vals[1], vals[2],
-                  vals[3], vals[4], vals[5],
-                  vals[6], vals[7], vals[8];
-  return true;
-}
-
 openMVG::Mat3 DeviceToCameraRotation()
 {
   // Rear camera, device axes to camera axes (X right, Y down, Z forward).
@@ -335,9 +300,6 @@ int main( int argc, char** argv )
     return EXIT_FAILURE;
   }
 
-  //---------------------------------------
-  // Cache EXIF headings for motion priors
-  //---------------------------------------
   //---------------------------------------
   // Cache EXIF data for motion priors
   //---------------------------------------

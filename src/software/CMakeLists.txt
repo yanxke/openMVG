@@ -7,8 +7,8 @@ if (OpenMVG_BUILD_OPENGL_EXAMPLES)
   add_subdirectory(SfMViewer)
 endif (OpenMVG_BUILD_OPENGL_EXAMPLES)
 
-add_subdirectory(colorHarmonize)
-add_subdirectory(VO)
+# add_subdirectory(colorHarmonize)
+# add_subdirectory(VO)
 
 if (OpenMVG_BUILD_GUI_SOFTWARES)
   find_package(Qt5 COMPONENTS Core Widgets Svg)

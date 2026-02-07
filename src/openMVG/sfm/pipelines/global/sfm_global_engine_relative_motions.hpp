@@ -50,6 +50,10 @@ public:
     double max_error_deg,
     double histogram_bucket_deg);
 
+  void SetTranslationAveragingConstraints(
+    double scale_multiplier,
+    double weight);
+
   bool Process() override;
 
 protected:
@@ -98,6 +102,8 @@ private:
   bool imu_rotation_filter_outliers_ = false;
   double imu_rotation_max_error_deg_ = 45.0;
   double imu_rotation_histogram_bucket_deg_ = 10.0;
+  double translation_averaging_constraint_scale_multiplier_ = 4.0;
+  double translation_averaging_constraint_weight_ = 10.0;
 
   Hash_Map<IndexT, Mat3> imu_pose_rotations_;
   bool imu_rotations_loaded_ = false;

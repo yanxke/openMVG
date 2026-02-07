@@ -30,6 +30,7 @@
 #include <cereal/types/map.hpp>
 #include <cereal/types/string.hpp>
 #include <cereal/types/unordered_map.hpp>
+#include <cereal/types/utility.hpp>
 #include <cereal/types/vector.hpp>
 
 namespace openMVG {
@@ -243,6 +244,22 @@ bool Load_Cereal(
           archive(cereal::make_nvp("control_points", control_points));
         }
     }
+
+    // Load max translation distance constraints (optional, for translation averaging)
+    try
+    {
+      archive(cereal::make_nvp("max_translation_distance", data.max_translation_distance_));
+      if (!data.max_translation_distance_.empty())
+      {
+        OPENMVG_LOG_INFO << "Loaded " << data.max_translation_distance_.size() 
+                         << " max translation distance constraints.";
+      }
+    }
+    catch (const cereal::Exception &)
+    {
+      // Optional field, ignore if not present
+      data.max_translation_distance_.clear();
+    }
   }
   catch (const cereal::Exception & e)
   {
@@ -313,6 +330,17 @@ bool Save_Cereal(
         archive(cereal::make_nvp("control_points", data.control_points));
       else
         archive(cereal::make_nvp("control_points", Landmarks()));
+    }
+
+    // Save max translation distance constraints (optional)
+    if (!data.max_translation_distance_.empty())
+    {
+      archive(cereal::make_nvp("max_translation_distance", data.max_translation_distance_));
+    }
+    else
+    {
+      Hash_Map<Pair, double> empty_constraints;
+      archive(cereal::make_nvp("max_translation_distance", empty_constraints));
     }
   }
   stream.close();

@@ -741,6 +741,8 @@ bool GlobalSfMReconstructionEngine_RelativeMotions::Compute_Global_Translations
     matches_provider_,
     global_rotations,
     tripletWise_matches,
+    translation_averaging_constraint_scale_multiplier_,
+    translation_averaging_constraint_weight_,
     sOut_directory_);
 
   if (!sOut_directory_.empty())

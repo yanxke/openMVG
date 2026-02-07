@@ -50,14 +50,18 @@ public:
     const openMVG::sfm::Matches_Provider * matches_provider,
     const Hash_Map<IndexT, Mat3> & map_globalR,
     matching::PairWiseMatches & tripletWise_matches,
-    const std::string & output_dir
+    double constraint_scale_multiplier = 4.0,
+    double constraint_weight = 10.0,
+    const std::string & output_dir = std::string()
   );
 
 private:
   bool Translation_averaging(
     ETranslationAveragingMethod eTranslationAveragingMethod,
     sfm::SfM_Data & sfm_data,
-    const Hash_Map<IndexT, Mat3> & map_globalR);
+    const Hash_Map<IndexT, Mat3> & map_globalR,
+    double constraint_scale_multiplier = 4.0,
+    double constraint_weight = 10.0);
 
   void Compute_translations(
     const sfm::SfM_Data & sfm_data,

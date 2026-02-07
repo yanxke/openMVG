@@ -57,6 +57,8 @@ bool GlobalSfM_Translation_AveragingSolver::Run
   const openMVG::sfm::Matches_Provider * matches_provider,
   const Hash_Map<IndexT, Mat3> & map_globalR,
   matching::PairWiseMatches & tripletWise_matches,
+  double constraint_scale_multiplier,
+  double constraint_weight,
   const std::string & output_dir
 )
 {
@@ -109,7 +111,9 @@ bool GlobalSfM_Translation_AveragingSolver::Run
     b_translation = Translation_averaging(
                 eTranslationAveragingMethod,
                 sfm_data,
-                map_globalR);
+                map_globalR,
+                constraint_scale_multiplier,
+                constraint_weight);
   }
 
   // =======================================================
@@ -130,7 +134,9 @@ bool GlobalSfM_Translation_AveragingSolver::Run
 bool GlobalSfM_Translation_AveragingSolver::Translation_averaging(
   ETranslationAveragingMethod eTranslationAveragingMethod,
   sfm::SfM_Data & sfm_data,
-  const Hash_Map<IndexT, Mat3> & map_globalR)
+  const Hash_Map<IndexT, Mat3> & map_globalR,
+  double constraint_scale_multiplier,
+  double constraint_weight)
 {
   //-------------------
   //-- GLOBAL TRANSLATIONS ESTIMATION from initial triplets t_ij guess
@@ -177,10 +183,20 @@ bool GlobalSfM_Translation_AveragingSolver::Translation_averaging(
     const std::set<IndexT> index = getIndexT(vec_relative_motion_);
 
     const size_t iNview = index.size();
-    OPENMVG_LOG_INFO << "\n-------------------------------" << "\n"
-      << " Global translations computation: " << "\n"
-      << "   - Ready to compute " << iNview << " global translations." << "\n"
-      << "     from #relative translations: " << vec_relative_motion_.size()*3;
+    OPENMVG_LOG_INFO << "\n-------------------------------";
+    OPENMVG_LOG_INFO << " Global translations computation:";
+    
+    // Log the solver method
+    std::string solver_name = "UNKNOWN";
+    switch (eTranslationAveragingMethod)
+    {
+      case TRANSLATION_AVERAGING_L1: solver_name = "L1 (Linear Programming)"; break;
+      case TRANSLATION_AVERAGING_SOFTL1: solver_name = "SOFTL1 (Ceres-based)"; break;
+      case TRANSLATION_AVERAGING_L2_DISTANCE_CHORDAL: solver_name = "L2 Distance Chordal"; break;
+    }
+    OPENMVG_LOG_INFO << "   - Method: " << solver_name;
+    OPENMVG_LOG_INFO << "   - Ready to compute " << iNview << " global translations.";
+    OPENMVG_LOG_INFO << "     from #relative translations: " << vec_relative_motion_.size()*3;
 
     if (iNview < 3)
     {
@@ -277,11 +293,244 @@ bool GlobalSfM_Translation_AveragingSolver::Translation_averaging(
       case TRANSLATION_AVERAGING_SOFTL1:
       {
         std::vector<Vec3> vec_translations;
-        if (!solve_translations_problem_softl1(
-          vec_relative_motion_cpy, vec_translations))
+        double final_scale_factor = 1.0;
+        
+        // Check if we have max distance constraints
+        bool has_constraints = !sfm_data.max_translation_distance_.empty();
+        
+        // Lambda to compute and print statistics
+        auto print_stats = [&](const std::vector<Vec3> & current_translations, double scale_factor, const std::string & label) {
+          std::vector<double> recon_distances;
+          std::vector<double> discrepancies; // actual / (limit * scale_factor)
+          struct ViolationInfo
+          {
+            Pair ids;
+            double distance;
+            double limit;
+            double discrepancy;
+          };
+          std::vector<ViolationInfo> violations_info;
+          std::vector<ViolationInfo> all_pairs_info;
+          auto view_name = [&](IndexT view_id) -> std::string {
+            auto it = sfm_data.views.find(view_id);
+            if (it == sfm_data.views.end() || !it->second)
+              return std::string("unknown");
+            return it->second->s_Img_path.empty() ? std::string("unknown") : it->second->s_Img_path;
+          };
+
+          for (const auto & constraint : sfm_data.max_translation_distance_)
+          {
+            const Pair & orig_id = constraint.first;
+            // Check if both poses are in the current problem
+            if (reindex_forward.count(orig_id.first) && reindex_forward.count(orig_id.second))
+            {
+              const IndexT i = reindex_forward.at(orig_id.first);
+              const IndexT j = reindex_forward.at(orig_id.second);
+              
+              const Mat3 & Ri = map_globalR.at(orig_id.first);
+              const Mat3 & Rj = map_globalR.at(orig_id.second);
+              
+              const Vec3 ci = -Ri.transpose() * current_translations[i];
+              const Vec3 cj = -Rj.transpose() * current_translations[j];
+              
+              double dist = (ci - cj).norm();
+              recon_distances.push_back(dist);
+              // Calculate discrepancy relative to the auto-scaled limit
+              discrepancies.push_back(dist / (constraint.second * scale_factor));
+              const double disc = discrepancies.back();
+              ViolationInfo info{orig_id, dist, constraint.second * scale_factor, disc};
+              all_pairs_info.push_back(info);
+              if (disc > 1.001)
+              {
+                violations_info.push_back(info);
+              }
+            }
+          }
+
+          if (!recon_distances.empty())
+          {
+            std::sort(recon_distances.begin(), recon_distances.end());
+            std::sort(discrepancies.begin(), discrepancies.end());
+
+            double sum_dist = 0, sum_disc = 0;
+            for(double d : recon_distances) sum_dist += d;
+            for(double d : discrepancies) sum_disc += d;
+
+            OPENMVG_LOG_INFO << "\n--- " << label << " Translation Distance Statistics ---";
+            OPENMVG_LOG_INFO << "  Count:  " << recon_distances.size();
+            OPENMVG_LOG_INFO << "  Min:    " << recon_distances.front();
+            OPENMVG_LOG_INFO << "  Max:    " << recon_distances.back();
+            OPENMVG_LOG_INFO << "  Mean:   " << sum_dist / recon_distances.size();
+            OPENMVG_LOG_INFO << "  Median: " << recon_distances[recon_distances.size()/2];
+
+            OPENMVG_LOG_INFO << "\n--- " << label << " Constraint Discrepancy Statistics (Actual / (Limit * Multiplier)) ---";
+            OPENMVG_LOG_INFO << "  Min:    " << discrepancies.front();
+            OPENMVG_LOG_INFO << "  Max:    " << discrepancies.back();
+            OPENMVG_LOG_INFO << "  Mean:   " << sum_disc / discrepancies.size();
+            OPENMVG_LOG_INFO << "  Median: " << discrepancies[discrepancies.size()/2];
+            
+            int violations = static_cast<int>(violations_info.size());
+            OPENMVG_LOG_INFO << "  Violations: " << violations << " / " << discrepancies.size();
+            if (!violations_info.empty())
+            {
+              const size_t max_to_print = 20;
+              OPENMVG_LOG_INFO << "  Violation details (up to " << max_to_print << "):";
+              std::sort(violations_info.begin(), violations_info.end(),
+                        [](const ViolationInfo & a, const ViolationInfo & b) {
+                          return a.discrepancy > b.discrepancy;
+                        });
+              for (size_t i = 0; i < std::min(max_to_print, violations_info.size()); ++i)
+              {
+                const auto & v = violations_info[i];
+                OPENMVG_LOG_INFO << "    - views " << v.ids.first << " / " << v.ids.second
+                                 << " (" << view_name(v.ids.first) << " , " << view_name(v.ids.second) << ")"
+                                 << " dist=" << v.distance
+                                 << " limit=" << v.limit
+                                 << " ratio=" << v.discrepancy;
+              }
+            }
+
+            if (!all_pairs_info.empty())
+            {
+              const size_t top_k = 10;
+              OPENMVG_LOG_INFO << "  Top " << top_k << " pairs by discrepancy (even if no violations):";
+              std::sort(all_pairs_info.begin(), all_pairs_info.end(),
+                        [](const ViolationInfo & a, const ViolationInfo & b) {
+                          return a.discrepancy > b.discrepancy;
+                        });
+              for (size_t i = 0; i < std::min(top_k, all_pairs_info.size()); ++i)
+              {
+                const auto & v = all_pairs_info[i];
+                OPENMVG_LOG_INFO << "    - views " << v.ids.first << " / " << v.ids.second
+                                 << " (" << view_name(v.ids.first) << " , " << view_name(v.ids.second) << ")"
+                                 << " dist=" << v.distance
+                                 << " limit=" << v.limit
+                                 << " ratio=" << v.discrepancy;
+              }
+            }
+          }
+        };
+
+        if (has_constraints)
         {
-          OPENMVG_LOG_ERROR << "Compute global translations: TRANSLATION_AVERAGING_SOFTL1 failed";
-          return false;
+          OPENMVG_LOG_INFO << "--- Auto-Scaling Constraints Pass ---";
+          
+          // 1. Run a baseline pass without constraints to find the reconstruction's scale
+          if (!solve_translations_problem_softl1(
+                vec_relative_motion_cpy, vec_translations))
+          {
+            OPENMVG_LOG_ERROR << "Baseline scale discovery failed.";
+            return false;
+          }
+
+          // 2. Measure the baseline reconstruction distances for constrained pairs
+          std::vector<double> recon_dists;
+          std::vector<double> user_limits;
+          recon_dists.reserve(sfm_data.max_translation_distance_.size());
+          user_limits.reserve(sfm_data.max_translation_distance_.size());
+          double sum_recon_dist = 0.0;
+          double sum_user_limit = 0.0;
+          size_t constrained_pair_count = 0;
+
+          for (const auto & constraint : sfm_data.max_translation_distance_)
+          {
+            const Pair & orig_id = constraint.first;
+            if (reindex_forward.count(orig_id.first) && reindex_forward.count(orig_id.second))
+            {
+              const IndexT i = reindex_forward.at(orig_id.first);
+              const IndexT j = reindex_forward.at(orig_id.second);
+              
+              const Mat3 & Ri = map_globalR.at(orig_id.first);
+              const Mat3 & Rj = map_globalR.at(orig_id.second);
+              const Vec3 ci = -Ri.transpose() * vec_translations[i];
+              const Vec3 cj = -Rj.transpose() * vec_translations[j];
+              
+              double recon_dist = (ci - cj).norm();
+              sum_recon_dist += recon_dist;
+              sum_user_limit += constraint.second;
+              recon_dists.push_back(recon_dist);
+              user_limits.push_back(constraint.second);
+              constrained_pair_count++;
+            }
+          }
+
+          if (constrained_pair_count > 0 && sum_user_limit > 0)
+          {
+            const double avg_recon = sum_recon_dist / constrained_pair_count;
+            const double avg_user = sum_user_limit / constrained_pair_count;
+
+            auto median = [](std::vector<double> & values) -> double {
+              if (values.empty()) return 0.0;
+              std::sort(values.begin(), values.end());
+              const size_t mid = values.size() / 2;
+              if (values.size() % 2 == 0)
+              {
+                return 0.5 * (values[mid - 1] + values[mid]);
+              }
+              return values[mid];
+            };
+
+            const double median_recon = median(recon_dists);
+            const double median_user = median(user_limits);
+            
+            // The user wants the limits to be multiplier X the current median distance
+            const double scale_factor = (median_recon * constraint_scale_multiplier) / median_user;
+            
+            OPENMVG_LOG_INFO << "Constraint Scaling Summary:";
+            OPENMVG_LOG_INFO << "  - Baseline Avg Distance: " << avg_recon;
+            OPENMVG_LOG_INFO << "  - User Limit Avg:        " << avg_user;
+            OPENMVG_LOG_INFO << "  - Baseline Median Distance: " << median_recon;
+            OPENMVG_LOG_INFO << "  - User Limit Median:        " << median_user;
+            final_scale_factor = scale_factor;
+            OPENMVG_LOG_INFO << "  - Computed Scale Factor: " << final_scale_factor << " (Target: " << constraint_scale_multiplier << "x median)";
+            
+            // Print statistics for the baseline pass
+            print_stats(vec_translations, final_scale_factor, "Baseline");
+
+            // 3. Remap and scale the constraints
+            Hash_Map<Pair, double> reindexed_constraints;
+            std::vector<Mat3> reindexed_rotations(iNview);
+            for (size_t i = 0; i < iNview; ++i)
+            {
+              const IndexT pose_id = reindex_backward[i];
+              reindexed_rotations[i] = map_globalR.at(pose_id);
+            }
+            for (const auto & constraint : sfm_data.max_translation_distance_)
+            {
+              const Pair & orig_id = constraint.first;
+              if (reindex_forward.count(orig_id.first) && reindex_forward.count(orig_id.second))
+              {
+                const IndexT new_i = reindex_forward.at(orig_id.first);
+                const IndexT new_j = reindex_forward.at(orig_id.second);
+                // Apply the scale factor to the user's relative limit
+                reindexed_constraints[Pair(new_i, new_j)] = constraint.second * scale_factor;
+              }
+            }
+
+            OPENMVG_LOG_INFO << "--- Final Constrained Pass ---";
+            // Use solver with auto-scaled constraints
+            if (!solve_translations_problem_softl1_with_constraints(
+                  vec_relative_motion_cpy, reindexed_rotations, reindexed_constraints, vec_translations,
+                  constraint_weight))
+            {
+              OPENMVG_LOG_ERROR << "Final constrained solver failed.";
+              return false;
+            }
+          }
+          else
+          {
+            OPENMVG_LOG_WARNING << "No valid constrained pairs found in the current graph. Using baseline.";
+          }
+        }
+        else
+        {
+          // Standard solver without constraints
+          if (!solve_translations_problem_softl1(
+                vec_relative_motion_cpy, vec_translations))
+          {
+            OPENMVG_LOG_ERROR << "Compute global translations: TRANSLATION_AVERAGING_SOFTL1 failed";
+            return false;
+          }
         }
 
         // A valid solution was found:
@@ -291,8 +540,11 @@ bool GlobalSfM_Translation_AveragingSolver::Translation_averaging(
           const Vec3 & t = vec_translations[i];
           const IndexT pose_id = reindex_backward[i];
           const Mat3 & Ri = map_globalR.at(pose_id);
-          sfm_data.poses[pose_id] = Pose3(Ri, -Ri.transpose()*t);
+          sfm_data.poses[pose_id] = Pose3(Ri, -Ri.transpose() * t);
         }
+
+        // Print final statistics
+        print_stats(vec_translations, final_scale_factor, "Final");
       }
       break;
 
