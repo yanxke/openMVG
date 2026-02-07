@@ -195,13 +195,16 @@ int main( int argc, char** argv )
     regions_provider = std::make_shared<Preemptive_Regions_Provider>(ui_preemptive_feature_count);
   }
 
-  // Show the progress on the command line:
-  system::LoggerProgress progress(1, {}, 1);
+  // Show region loading progress in coarse 10% steps to reduce log noise.
+  system::LoggerProgress regions_load_progress(1, {}, 10);
 
-  if (!regions_provider->load(sfm_data, sMatchesDirectory, regions_type, &progress)) {
+  if (!regions_provider->load(sfm_data, sMatchesDirectory, regions_type, &regions_load_progress)) {
     OPENMVG_LOG_ERROR << "Cannot load view regions from: " << sMatchesDirectory << ".";
     return EXIT_FAILURE;
   }
+
+  // Keep detailed progress for the matching stage.
+  system::LoggerProgress progress(1, {}, 1);
 
   PairWiseMatches map_PutativeMatches;
 

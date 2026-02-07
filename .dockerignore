@@ -50,3 +50,4 @@
 
 # Docker build cache directory
 .buildx-cache
+openMVG_Build
