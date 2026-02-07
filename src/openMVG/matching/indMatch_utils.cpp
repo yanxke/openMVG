@@ -129,5 +129,40 @@ bool Save
   }
   return static_cast<bool>(stream);
 }
+
+bool SaveJson
+(
+  const PairWiseMatches & matches,
+  const std::string & filename
+)
+{
+  std::ofstream stream(filename);
+  if (!stream)
+  {
+    OPENMVG_LOG_ERROR << "Cannot save the JSON matche file: " << filename << ".";
+    return false;
+  }
+
+  stream << "{\n  \"pairs\": [\n";
+  bool first = true;
+  for (const auto& match_pair : matches)
+  {
+    if (!first)
+      stream << ",\n";
+    first = false;
+
+    const auto& pair = match_pair.first;
+    const auto& match_vector = match_pair.second;
+
+    stream << "    {\"i\": " << pair.first
+           << ", \"j\": " << pair.second
+           << ", \"num_matches\": " << match_vector.size() << "}";
+  }
+  stream << "\n  ]\n}\n";
+
+  stream.close();
+  return !stream.bad();
+}
+
 }  // namespace matching
 }  // namespace openMVG

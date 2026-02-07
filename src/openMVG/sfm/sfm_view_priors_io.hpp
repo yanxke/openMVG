@@ -13,6 +13,8 @@
 
 #include <cereal/types/polymorphic.hpp>
 #include <cereal/types/vector.hpp>
+#include <cmath>
+#include <stdexcept>
 
 template <class Archive>
 void openMVG::sfm::ViewPriors::save( Archive & ar ) const
@@ -20,9 +22,15 @@ void openMVG::sfm::ViewPriors::save( Archive & ar ) const
   View::save(ar);
 
   // Pose center prior
-  if (b_use_pose_center_)
+  bool has_valid_pose_center = b_use_pose_center_;
+  for (int i = 0; i < 3 && has_valid_pose_center; ++i) {
+    if (!std::isfinite(center_weight_(i)) || !std::isfinite(pose_center_(i))) {
+      has_valid_pose_center = false;
+    }
+  }
+  ar( cereal::make_nvp( "use_pose_center_prior", has_valid_pose_center ) );
+  if (has_valid_pose_center)
   {
-    ar( cereal::make_nvp( "use_pose_center_prior", b_use_pose_center_ ) );
     const std::vector<double> vec_weights { center_weight_( 0 ), center_weight_( 1 ), center_weight_( 2 ) };
     ar( cereal::make_nvp( "center_weight", vec_weights ) );
     const std::vector<double> vec { pose_center_( 0 ), pose_center_( 1 ), pose_center_( 2 ) };
@@ -44,6 +52,42 @@ void openMVG::sfm::ViewPriors::save( Archive & ar ) const
     ar( cereal::make_nvp( "rotation", mat ) );
   }
   */
+
+  // GPS compass heading
+  const bool has_valid_heading = b_has_heading_ && std::isfinite(gps_heading_);
+  ar( cereal::make_nvp( "has_gps_heading", has_valid_heading ) );
+  if (has_valid_heading)
+  {
+    ar( cereal::make_nvp( "gps_heading", gps_heading_ ) );
+  }
+
+  // IMU rotation matrix
+  bool has_valid_imu_rotation = b_has_imu_rotation_;
+  for (int i = 0; i < 3 && has_valid_imu_rotation; ++i) {
+    for (int j = 0; j < 3 && has_valid_imu_rotation; ++j) {
+      if (!std::isfinite(imu_rotation_(i, j))) {
+        has_valid_imu_rotation = false;
+      }
+    }
+  }
+  ar( cereal::make_nvp( "has_imu_rotation", has_valid_imu_rotation ) );
+  if (has_valid_imu_rotation)
+  {
+    const std::vector<std::vector<double>> mat =
+    {
+      { imu_rotation_( 0, 0 ), imu_rotation_( 0, 1 ), imu_rotation_( 0, 2 ) },
+      { imu_rotation_( 1, 0 ), imu_rotation_( 1, 1 ), imu_rotation_( 1, 2 ) },
+      { imu_rotation_( 2, 0 ), imu_rotation_( 2, 1 ), imu_rotation_( 2, 2 ) }
+    };
+    ar( cereal::make_nvp( "imu_rotation", mat ) );
+  }
+
+  // XMP step counter
+  ar( cereal::make_nvp( "has_step_counter", b_has_step_counter_ ) );
+  if (b_has_step_counter_)
+  {
+    ar( cereal::make_nvp( "step_counter", step_counter_ ) );
+  }
 }
 
 template <class Archive>
@@ -55,16 +99,29 @@ void openMVG::sfm::ViewPriors::load( Archive & ar )
   try
   {
     ar( cereal::make_nvp( "use_pose_center_prior", b_use_pose_center_ ) );
-    std::vector<double> vec( 3 );
-    ar( cereal::make_nvp( "center_weight", vec ) );
-    center_weight_ = Eigen::Map<const Vec3>( &vec[0] );
-    ar( cereal::make_nvp( "center", vec ) );
-    pose_center_ = Eigen::Map<const Vec3>( &vec[0] );
+    if (b_use_pose_center_)
+    {
+      std::vector<double> vec( 3 );
+      ar( cereal::make_nvp( "center_weight", vec ) );
+      if (vec.size() != 3)
+      {
+        throw std::runtime_error("Invalid center_weight vector size");
+      }
+      center_weight_ = Eigen::Map<const Vec3>( &vec[0] );
+      ar( cereal::make_nvp( "center", vec ) );
+      if (vec.size() != 3)
+      {
+        throw std::runtime_error("Invalid center vector size");
+      }
+      pose_center_ = Eigen::Map<const Vec3>( &vec[0] );
+    }
   }
-  catch ( cereal::Exception & e )
+  catch ( const std::exception & e )
   {
     // if it fails just use a default settings
     b_use_pose_center_ = false;
+    center_weight_ = Vec3::Constant(1.0);
+    pose_center_ = Vec3::Zero();
   }
 
   // Pose rotation prior
@@ -86,6 +143,63 @@ void openMVG::sfm::ViewPriors::load( Archive & ar )
     b_use_pose_rotation_ = false;
   }
   */
+
+  // GPS compass heading
+  try
+  {
+    ar( cereal::make_nvp( "has_gps_heading", b_has_heading_ ) );
+    if (b_has_heading_)
+    {
+      ar( cereal::make_nvp( "gps_heading", gps_heading_ ) );
+    }
+  }
+  catch ( const std::exception & e )
+  {
+    // if it fails just use default settings
+    b_has_heading_ = false;
+    gps_heading_ = 0.0;
+  }
+
+  // IMU rotation matrix
+  try
+  {
+    ar( cereal::make_nvp( "has_imu_rotation", b_has_imu_rotation_ ) );
+    if (b_has_imu_rotation_)
+    {
+      std::vector<std::vector<double>> mat( 3, std::vector<double>( 3 ) );
+      ar( cereal::make_nvp( "imu_rotation", mat ) );
+      if (mat.size() != 3 || mat[0].size() != 3 || mat[1].size() != 3 || mat[2].size() != 3)
+      {
+        throw std::runtime_error("Invalid imu_rotation matrix size");
+      }
+      // copy back to the rotation
+      imu_rotation_.row( 0 ) = Eigen::Map<const Vec3>( &( mat[0][0] ) );
+      imu_rotation_.row( 1 ) = Eigen::Map<const Vec3>( &( mat[1][0] ) );
+      imu_rotation_.row( 2 ) = Eigen::Map<const Vec3>( &( mat[2][0] ) );
+    }
+  }
+  catch ( const std::exception & e )
+  {
+    // if it fails just use default settings
+    b_has_imu_rotation_ = false;
+    imu_rotation_ = Mat3::Identity();
+  }
+
+  // XMP step counter
+  try
+  {
+    ar( cereal::make_nvp( "has_step_counter", b_has_step_counter_ ) );
+    if (b_has_step_counter_)
+    {
+      ar( cereal::make_nvp( "step_counter", step_counter_ ) );
+    }
+  }
+  catch ( const std::exception & e )
+  {
+    // if it fails just use default settings
+    b_has_step_counter_ = false;
+    step_counter_ = 0;
+  }
 }
 
 CEREAL_REGISTER_TYPE_WITH_NAME( openMVG::sfm::ViewPriors, "view_priors" );

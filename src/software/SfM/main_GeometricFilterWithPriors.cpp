@@ -31,6 +31,7 @@
 #include "openMVG/sfm/pipelines/sfm_regions_provider_cache.hpp"
 #include "openMVG/sfm/sfm_data.hpp"
 #include "openMVG/sfm/sfm_data_io.hpp"
+#include "openMVG/sfm/sfm_view_priors.hpp"
 #include "openMVG/stl/stl.hpp"
 #include "openMVG/system/timer.hpp"
 
@@ -50,41 +51,6 @@ using namespace openMVG::sfm;
 using namespace openMVG::matching_image_collection;
 
 namespace {
-
-bool ParseImuRotationFromUserComment(const std::string & comment, openMVG::Mat3 & rotation_dw)
-{
-  const std::string key = "Rotation:";
-  const std::size_t pos = comment.find(key);
-  if (pos == std::string::npos)
-    return false;
-
-  std::string rot_part = comment.substr(pos + key.size());
-  for (char & c : rot_part)
-  {
-    if (c == '\n' || c == '\r')
-      c = ' ';
-  }
-
-  std::vector<double> vals;
-  vals.reserve(9);
-  std::string token;
-  std::stringstream ss(rot_part);
-  while (std::getline(ss, token, ','))
-  {
-    std::stringstream t(token);
-    double v = 0.0;
-    if (t >> v)
-      vals.push_back(v);
-  }
-  if (vals.size() < 9)
-    return false;
-
-  rotation_dw << vals[0], vals[1], vals[2],
-                  vals[3], vals[4], vals[5],
-                  vals[6], vals[7], vals[8];
-  return true;
-}
-
 openMVG::Mat3 DeviceToCameraRotation()
 {
   // Rear camera, device axes to camera axes (X right, Y down, Z forward).
@@ -335,9 +301,6 @@ int main( int argc, char** argv )
   }
 
   //---------------------------------------
-  // Cache EXIF headings for motion priors
-  //---------------------------------------
-  //---------------------------------------
   // Cache EXIF data for motion priors
   //---------------------------------------
   std::map<IndexT, double> map_headings;
@@ -385,33 +348,24 @@ int main( int argc, char** argv )
 
   if (eGeometricModelToCompute == ESSENTIAL_MATRIX_IMU)
   {
-    OPENMVG_LOG_INFO << "Caching IMU rotations for guided matching...";
+    OPENMVG_LOG_INFO << "Caching IMU rotations from ViewPriors...";
     const Mat3 R_cd = DeviceToCameraRotation();
     const Mat3 R_landscape = DeviceLandscapeLeftRemap();
     for (const auto & view_ptr : sfm_data.GetViews())
     {
-      const std::string image_path = stlplus::folder_append_separator(sfm_data.s_root_path) + view_ptr.second->s_Img_path;
-      std::unique_ptr<openMVG::exif::Exif_IO> exifIO(new openMVG::exif::Exif_IO_EasyExif(image_path));
-      
-      std::string user_comment;
-      if (!exifIO->UserComment(&user_comment))
-        continue;
+      // Try to get IMU rotation from ViewPriors (already loaded from sfm_data.json)
+      const ViewPriors* view_priors = dynamic_cast<const ViewPriors*>(view_ptr.second.get());
+      if (view_priors && view_priors->b_has_imu_rotation_)
+      {
+        // Use the IMU rotation from ViewPriors (Device->World in ENU frame)
+        const Mat3& R_dw = view_priors->imu_rotation_;
 
-      Mat3 R_dw;
-      if (!ParseImuRotationFromUserComment(user_comment, R_dw))
-        continue;
-
-      // Convert Device->World (ENU) to World->Camera (OpenMVG axes)
-      const Mat3 R_wc = R_cd * R_landscape * R_dw.transpose();
-      map_imu_rotations[view_ptr.first] = R_wc;
+        // Convert Device->World (ENU) to World->Camera (OpenMVG axes)
+        const Mat3 R_wc = R_cd * R_landscape * R_dw.transpose();
+        map_imu_rotations[view_ptr.first] = R_wc;
+      }
     }
-    OPENMVG_LOG_INFO << "Loaded IMU rotations for " << map_imu_rotations.size() << " / " << sfm_data.GetViews().size() << " images.";
-    if (map_imu_rotations.empty())
-    {
-      OPENMVG_LOG_ERROR << "No IMU rotations were loaded from EXIF UserComment (Rotation tag). "
-                        << "Aborting as geometric filtering will fail for all pairs.";
-      return EXIT_FAILURE;
-    }
+    OPENMVG_LOG_INFO << "Loaded IMU rotations for " << map_imu_rotations.size() << " / " << sfm_data.GetViews().size() << " images from ViewPriors.";
   }
 
   //---------------------------------------
@@ -447,14 +401,17 @@ int main( int argc, char** argv )
     regions_provider = std::make_shared<Regions_Provider_Cache>( ui_max_cache_size );
   }
 
-  // Show the progress on the command line:
-  system::LoggerProgress progress(1, {}, 1);
+  // Show region loading progress in coarse 10% steps to reduce log noise.
+  system::LoggerProgress regions_load_progress(1, {}, 10);
 
-  if ( !regions_provider->load( sfm_data, sMatchesDirectory, regions_type, &progress ) )
+  if ( !regions_provider->load( sfm_data, sMatchesDirectory, regions_type, &regions_load_progress ) )
   {
     OPENMVG_LOG_ERROR << "Invalid regions.";
     return EXIT_FAILURE;
   }
+
+  // Keep detailed progress for geometric model estimation and filtering.
+  system::LoggerProgress progress(1, {}, 1);
 
   PairWiseMatches map_PutativeMatches;
   //---------------------------------------
@@ -591,6 +548,20 @@ int main( int argc, char** argv )
     {
       OPENMVG_LOG_ERROR << "Cannot save filtered matches in: " << sFilteredMatchesFilename;
       return EXIT_FAILURE;
+    }
+
+    // Also save as JSON for easier parsing
+    const std::string sJsonFilename = stlplus::create_filespec(
+      stlplus::folder_part(sFilteredMatchesFilename),
+      stlplus::basename_part(sFilteredMatchesFilename),
+      "json");
+    if ( !SaveJson( map_GeometricMatches, sJsonFilename ) )
+    {
+      OPENMVG_LOG_WARNING << "Cannot save JSON matches to: " << sJsonFilename;
+    }
+    else
+    {
+      OPENMVG_LOG_INFO << "Saved JSON matches to: " << sJsonFilename;
     }
 
     // -- export Geometric View Graph statistics
