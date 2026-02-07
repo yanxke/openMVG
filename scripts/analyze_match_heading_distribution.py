@@ -89,25 +89,30 @@ def create_histogram(angle_diffs, bucket_size=10):
 
 
 def print_histogram(histogram, angle_diffs, bucket_size=10):
-    """Print histogram as ASCII art"""
+    """Print histogram as ASCII art with cumulative distribution"""
     if not histogram:
         print("No data to display")
         return
 
     total_matches = len(angle_diffs)
     max_count = max(histogram.values())
-    bar_width = 60  # characters
+    bar_width = 45  # characters (reduced to fit cumulative column)
 
     print("\n" + "="*80)
     print("HEADING ANGLE DIFFERENCE HISTOGRAM")
     print("="*80)
-    print(f"\nTotal image pairs with heading data: {total_matches}")
+    print(f"\nTotal image pairs with heading data: {total_matches:,}")
     print(f"Bucket size: {bucket_size}°\n")
+    print(f"{'Range':<12} {'Distribution':<48} {'Count':>8}  {'%':>5}  {'Cumul%':>6}")
+    print("-" * 80)
 
-    # Print histogram
+    # Print histogram with cumulative percentage
+    cumulative_count = 0
     for bucket in range(0, 180, bucket_size):
         count = histogram.get(bucket, 0)
+        cumulative_count += count
         percentage = 100 * count / total_matches if total_matches > 0 else 0
+        cumulative_pct = 100 * cumulative_count / total_matches if total_matches > 0 else 0
 
         # Create bar
         bar_length = int((count / max_count) * bar_width) if max_count > 0 else 0
@@ -116,7 +121,7 @@ def print_histogram(histogram, angle_diffs, bucket_size=10):
         # Format label
         label = f"{bucket:3d}°-{bucket+bucket_size-1:3d}°"
 
-        print(f"{label}: {bar} {count:5d} ({percentage:5.1f}%)")
+        print(f"{label:<12} {bar:<48} {count:8,}  {percentage:5.1f}  {cumulative_pct:6.1f}")
 
     # Summary statistics
     print("\n" + "-"*80)
@@ -185,17 +190,35 @@ Example:
 
     # Read data
     print("Reading files...")
-    pairs = read_match_pairs_json(matches_json_file)
+    verified_pairs = read_match_pairs_json(matches_json_file)
     view_data = read_sfm_data(sfm_data_file)
 
-    print(f"  Loaded {len(pairs):,} verified match image pairs")
+    print(f"  Loaded {len(verified_pairs):,} verified match image pairs")
     print(f"  Loaded {len(view_data):,} views from sfm_data.json")
 
-    # Calculate angle differences
-    angle_diffs = []
+    # Get list of views with heading data
+    views_with_heading = [view_id for view_id in view_data if 'heading' in view_data[view_id]]
+    print(f"  Views with heading data: {len(views_with_heading):,}")
+
+    # Calculate angle differences for ALL possible pairs (exhaustive)
+    print("\nCalculating exhaustive pair heading differences...")
+    all_angle_diffs = []
+    for i in range(len(views_with_heading)):
+        for j in range(i + 1, len(views_with_heading)):
+            view_i = views_with_heading[i]
+            view_j = views_with_heading[j]
+
+            heading_i = view_data[view_i]['heading']
+            heading_j = view_data[view_j]['heading']
+
+            angle_diff = normalize_angle_diff(heading_i, heading_j)
+            all_angle_diffs.append(angle_diff)
+
+    # Calculate angle differences for verified matches
+    verified_angle_diffs = []
     pairs_without_heading = 0
 
-    for i, j in pairs:
+    for i, j in verified_pairs:
         # Check if both views have heading data
         if i in view_data and 'heading' in view_data[i] and \
            j in view_data and 'heading' in view_data[j]:
@@ -204,20 +227,30 @@ Example:
             heading_j = view_data[j]['heading']
 
             angle_diff = normalize_angle_diff(heading_i, heading_j)
-            angle_diffs.append(angle_diff)
+            verified_angle_diffs.append(angle_diff)
         else:
             pairs_without_heading += 1
 
     if pairs_without_heading > 0:
-        print(f"\nWarning: {pairs_without_heading} image pairs have missing heading data")
+        print(f"Warning: {pairs_without_heading} verified pairs have missing heading data")
 
-    # Create and print histogram
-    if not angle_diffs:
+    # Print histograms
+    if not all_angle_diffs:
         print("\nError: No image pairs with heading data found!")
         exit(1)
 
-    histogram = create_histogram(angle_diffs, args.bucket_size)
-    print_histogram(histogram, angle_diffs, args.bucket_size)
+    print("\n" + "="*80)
+    print("EXHAUSTIVE PAIRS (All Possible Pairs)")
+    print("="*80)
+    histogram_all = create_histogram(all_angle_diffs, args.bucket_size)
+    print_histogram(histogram_all, all_angle_diffs, args.bucket_size)
+
+    if verified_angle_diffs:
+        print("\n" + "="*80)
+        print("VERIFIED MATCHES (Geometrically Verified Pairs)")
+        print("="*80)
+        histogram_verified = create_histogram(verified_angle_diffs, args.bucket_size)
+        print_histogram(histogram_verified, verified_angle_diffs, args.bucket_size)
 
 
 if __name__ == "__main__":
