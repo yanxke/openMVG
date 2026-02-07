@@ -5,65 +5,48 @@ Shows how many pairs were filtered out and whether they would have passed geomet
 """
 
 import argparse
-import struct
+import json
 import os
 
 def read_pairs_bin(filepath):
-    """Read pairs from a .bin file and return as set of tuples (i, j) where i < j"""
+    """Read pairs from a text file and return as set of tuples (i, j) where i < j"""
     pairs = set()
     if not os.path.exists(filepath):
         print(f"Error: {filepath} not found")
         exit(1)
 
-    with open(filepath, 'rb') as f:
-        # Read number of pairs
-        num_pairs_bytes = f.read(8)
-        if len(num_pairs_bytes) < 8:
-            return pairs
-        num_pairs = struct.unpack('Q', num_pairs_bytes)[0]
-
-        # Read each pair
-        for _ in range(num_pairs):
-            pair_bytes = f.read(8)
-            if len(pair_bytes) < 8:
-                break
-            i, j = struct.unpack('II', pair_bytes)
-            # Normalize so smaller index is first
-            pairs.add((min(i, j), max(i, j)))
+    with open(filepath, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            parts = line.split()
+            if len(parts) != 2:
+                continue
+            try:
+                i, j = int(parts[0]), int(parts[1])
+                # Normalize so smaller index is first
+                pairs.add((min(i, j), max(i, j)))
+            except ValueError:
+                continue
 
     return pairs
 
-def read_matches_bin(filepath):
-    """Read geometrically verified matches and return as set of tuples (i, j) where i < j"""
+def read_matches_json(filepath):
+    """Read geometrically verified matches from JSON and return as set of tuples (i, j) where i < j"""
     matches = set()
     if not os.path.exists(filepath):
         print(f"Error: {filepath} not found")
         exit(1)
 
-    with open(filepath, 'rb') as f:
-        # Read number of pairs
-        num_pairs_bytes = f.read(8)
-        if len(num_pairs_bytes) < 8:
-            return matches
-        num_pairs = struct.unpack('Q', num_pairs_bytes)[0]
+    import json
+    with open(filepath, 'r') as f:
+        data = json.load(f)
 
-        # Read each match
-        for _ in range(num_pairs):
-            # Read pair indices
-            pair_bytes = f.read(8)
-            if len(pair_bytes) < 8:
-                break
-            i, j = struct.unpack('II', pair_bytes)
-
-            # Read number of matches for this pair
-            num_matches_bytes = f.read(8)
-            if len(num_matches_bytes) < 8:
-                break
-            num_matches = struct.unpack('Q', num_matches_bytes)[0]
-
-            # Skip the actual match data (each match is 2 uint32s)
-            f.seek(num_matches * 8, 1)
-
+    if 'pairs' in data:
+        for pair_data in data['pairs']:
+            i = pair_data['i']
+            j = pair_data['j']
             # Normalize so smaller index is first
             matches.add((min(i, j), max(i, j)))
 
@@ -194,13 +177,13 @@ Examples:
   %(prog)s \\
     -op /data/openmvg/matches/pairs_exhaustive.bin \\
     -np /data/openmvg/matches/pairs_compass.bin \\
-    -m /data/openmvg/matches/matches.e.bin
+    -m /data/openmvg/matches/matches.e.json
 
   # Compare different heading thresholds
   %(prog)s \\
     --old-pairs /data/openmvg/matches/pairs_h90.bin \\
     --new-pairs /data/openmvg/matches/pairs_h120.bin \\
-    --matches /data/openmvg/matches/matches.e.bin
+    --matches /data/openmvg/matches/matches.e.json
         """)
 
     parser.add_argument('-op', '--old-pairs', required=True,
@@ -208,7 +191,7 @@ Examples:
     parser.add_argument('-np', '--new-pairs', required=True,
                         help='New/filtered pairs.bin file (e.g., COMPASS or lower threshold)')
     parser.add_argument('-m', '--matches', required=True,
-                        help='Geometrically verified matches.e.bin file')
+                        help='Geometrically verified matches.e.json file')
 
     args = parser.parse_args()
 
@@ -229,7 +212,7 @@ Examples:
     print("Reading files...")
     old_pairs = read_pairs_bin(args.old_pairs)
     new_pairs = read_pairs_bin(args.new_pairs)
-    verified_matches = read_matches_bin(args.matches)
+    verified_matches = read_matches_json(args.matches)
 
     print(f"  Old pairs: {len(old_pairs):,} pairs")
     print(f"  New pairs: {len(new_pairs):,} pairs")

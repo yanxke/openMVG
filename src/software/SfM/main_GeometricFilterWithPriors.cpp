@@ -588,6 +588,20 @@ int main( int argc, char** argv )
       return EXIT_FAILURE;
     }
 
+    // Also save as JSON for easier parsing
+    const std::string sJsonFilename = stlplus::create_filespec(
+      stlplus::folder_part(sFilteredMatchesFilename),
+      stlplus::basename_part(sFilteredMatchesFilename),
+      "json");
+    if ( !SaveJson( map_GeometricMatches, sJsonFilename ) )
+    {
+      OPENMVG_LOG_WARNING << "Cannot save JSON matches to: " << sJsonFilename;
+    }
+    else
+    {
+      OPENMVG_LOG_INFO << "Saved JSON matches to: " << sJsonFilename;
+    }
+
     // -- export Geometric View Graph statistics
     graph::getGraphStatistics(sfm_data.GetViews().size(), getPairs(map_GeometricMatches));
 

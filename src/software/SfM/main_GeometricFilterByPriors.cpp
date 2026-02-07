@@ -234,5 +234,19 @@ int main(int argc, char **argv) {
         return EXIT_FAILURE;
     }
 
+    // Also save as JSON for easier parsing
+    const std::string sJsonFilename = stlplus::create_filespec(
+      stlplus::folder_part(sOutputMatchesFilename),
+      stlplus::basename_part(sOutputMatchesFilename),
+      "json");
+    if ( !SaveJson( filtered_Matches, sJsonFilename ) )
+    {
+      std::cerr << "Warning: Cannot save JSON matches to: " << sJsonFilename << "\n";
+    }
+    else
+    {
+      std::cout << "Saved JSON matches to: " << sJsonFilename << "\n";
+    }
+
     return EXIT_SUCCESS;
 }
