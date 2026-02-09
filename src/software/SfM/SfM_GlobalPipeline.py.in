@@ -47,6 +47,8 @@ parser.add_argument("-mi", "--min_inliers", type=int, default=50, help="Minimum 
 parser.add_argument("-ri", "--ransac_iter", type=int, default=512, help="RANSAC iterations for geometric filter.")
 parser.add_argument("--use_plain_geometric_filter", action="store_true",
                     help="Use openMVG_main_GeometricFilter with -g e (no priors), instead of openMVG_main_GeometricFilterWithPriors -g i.")
+parser.add_argument("--excluded_pairs_file", type=str, default="",
+                    help="Optional JSON file of excluded image pairs. If not set, uses matches/excluded_pairs.json when present.")
 parser.set_defaults(imu_rotation_filter_outliers=True)
 parser.add_argument("input_dir", help="Input directory containing the images.")
 parser.add_argument("output_dir", help="Output directory where the project files will be saved.")
@@ -195,19 +197,35 @@ with open(log_path, "a") as log_file:
   if not os.path.exists(reconstruction_dir):
     os.mkdir(reconstruction_dir)
 
-  run_step("6. Do Global reconstruction",
-           [os.path.join(OPENMVG_SFM_BIN, "openMVG_main_SfM"),
-            "--sfm_engine", "GLOBAL",
-            "--input_file", matches_dir+"/sfm_data.json",
-            "--match_file", actual_matches,
-            "--output_dir", reconstruction_dir,
-            "--rotationAveraging", "1",
-            "-P",
-            "--imu_rotation_weight", str(args.imu_rotation_weight),
-            "--imu_rotation_max_error", str(args.imu_rotation_max_error),
-            "--imu_rotation_histogram_bucket", str(args.imu_rotation_histogram_bucket),
-            "--imu_rotation_filter_outliers", "1" if args.imu_rotation_filter_outliers else "0"],
-           log_file)
+  excluded_pairs_file = args.excluded_pairs_file
+  if not excluded_pairs_file:
+    default_exclusions = os.path.join(matches_dir, "excluded_pairs.json")
+    if os.path.exists(default_exclusions):
+      excluded_pairs_file = default_exclusions
+
+  if excluded_pairs_file:
+    msg = "Using excluded pairs file: {}\n".format(excluded_pairs_file)
+  else:
+    msg = "No excluded pairs file found. Running SfM without exclusions.\n"
+  print(msg.strip())
+  log_file.write(msg)
+  log_file.flush()
+
+  sfm_cmd = [os.path.join(OPENMVG_SFM_BIN, "openMVG_main_SfM"),
+             "--sfm_engine", "GLOBAL",
+             "--input_file", matches_dir+"/sfm_data.json",
+             "--match_file", actual_matches,
+             "--output_dir", reconstruction_dir,
+             "--rotationAveraging", "1",
+             "-P",
+             "--imu_rotation_weight", str(args.imu_rotation_weight),
+             "--imu_rotation_max_error", str(args.imu_rotation_max_error),
+             "--imu_rotation_histogram_bucket", str(args.imu_rotation_histogram_bucket),
+             "--imu_rotation_filter_outliers", "1" if args.imu_rotation_filter_outliers else "0"]
+  if excluded_pairs_file:
+    sfm_cmd.extend(["--excluded_pairs_file", excluded_pairs_file])
+
+  run_step("6. Do Global reconstruction", sfm_cmd, log_file)
 
   # run_step("7. Colorize Structure",
   #          [os.path.join(OPENMVG_SFM_BIN, "openMVG_main_ComputeSfM_DataColor"), "-i", reconstruction_dir+"/sfm_data.bin", "-o", os.path.join(reconstruction_dir,"colorized.ply")],

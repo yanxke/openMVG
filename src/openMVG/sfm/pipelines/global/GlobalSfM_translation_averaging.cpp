@@ -48,6 +48,36 @@ using namespace openMVG::cameras;
 using namespace openMVG::geometry;
 using namespace openMVG::matching;
 
+void DumpCandidateTripletsJson(
+  const std::string & path,
+  const std::vector<graph::Triplet> & triplets)
+{
+  OPENMVG_LOG_INFO << "Writing debug JSON: " << path;
+  std::ofstream os(path.c_str());
+  if (!os.is_open())
+  {
+    OPENMVG_LOG_WARNING << "Cannot write debug triplets JSON: " << path;
+    return;
+  }
+
+  os << "{\n";
+  os << "  \"num_triplets\": " << triplets.size() << ",\n";
+  os << "  \"triplets\": [\n";
+  for (size_t i = 0; i < triplets.size(); ++i)
+  {
+    const graph::Triplet & t = triplets[i];
+    if (i != 0)
+      os << ",\n";
+    os << "    {\"triplet_id\": " << i
+       << ", \"pose_i\": " << t.i
+       << ", \"pose_j\": " << t.j
+       << ", \"pose_k\": " << t.k
+       << "}";
+  }
+  os << "\n  ]\n";
+  os << "}\n";
+}
+
 /// Use features in normalized camera frames
 bool GlobalSfM_Translation_AveragingSolver::Run
 (
@@ -435,6 +465,12 @@ void GlobalSfM_Translation_AveragingSolver::ComputePutativeTranslation_EdgesCove
   const std::vector<graph::Triplet> vec_triplets =
     graph::TripletListing(rotation_pose_id_graph);
   OPENMVG_LOG_INFO << "#Triplets: " << vec_triplets.size();
+  if (!output_dir_.empty())
+  {
+    DumpCandidateTripletsJson(
+      stlplus::create_filespec(output_dir_, "sfm_debug_candidate_triplets", "json"),
+      vec_triplets);
+  }
 
   {
     // Compute triplets of translations
