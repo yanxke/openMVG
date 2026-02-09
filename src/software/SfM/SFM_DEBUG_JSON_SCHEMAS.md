@@ -9,6 +9,29 @@ All files are written to the SfM output directory (`directory_output` / `sOut_di
 - `openmvg/reconstruction_global/`
 
 Some files are produced by `main_SfM.cpp` for any engine, and some are specific to Global SfM.
+The file sections below are ordered by when artifacts are generated/written.
+
+## Reconstruction Output Generation Order (Global SfM)
+
+Within `reconstruction_global/`, files are generated in this order:
+
+1. `sfm_debug_matches_loaded.json`
+2. `sfm_debug_matches_after_exclusions.json`
+3. `relative_rotations_before_rotation_averaging.csv`
+4. `camera_rotations_after_rotation_averaging.csv`
+5. `sfm_debug_candidate_triplets.json`
+6. `sfm_debug_triplet_wise_matches.json`
+7. `relative_translations_triplets.csv`
+8. `camera_poses_after_translation_averaging.csv`
+9. `sfm_debug_tracks_filtered_len3.json`
+10. `sfm_debug_structure_after_triangulation.json`
+11. `camera_poses_after_ba_T_X.csv`
+12. `camera_poses_after_ba_RT_X.csv`
+13. `camera_poses_after_ba_KRT_X.csv` (if intrinsic refinement is enabled)
+14. `sfm_debug_structure_after_outlier_cleanup.json`
+15. `camera_poses_after_ba_final.csv`
+16. `sfm_debug_structure_after_final_ba.json`
+17. `sfm_data_expanded.json`
 
 ## Earlier Pipeline JSON Files (`SfM_GlobalPipeline.py.in`, steps 1-5)
 
@@ -168,57 +191,32 @@ Purpose:
 Schema:
 - Same as `sfm_debug_matches_loaded.json`.
 
-## File: `sfm_data_expanded.json`
+## File: `sfm_debug_candidate_triplets.json`
 
 When written:
-- Final export stage in `main_SfM.cpp` (alongside `sfm_data.bin`).
+- In Global SfM translation stage, immediately after candidate triplet listing (`graph::TripletListing`).
 
 Purpose:
-- Full final reconstruction in OpenMVG JSON format (`ESfM_Data(ALL)`).
+- Raw candidate pose triplets before triplet translation estimation/inlier filtering.
 
 Schema:
 ```json
 {
-  "root_path": "...",
-  "views": [/* same style as sfm_data.json */],
-  "intrinsics": [/* camera models + params */],
-  "extrinsics": [
+  "num_triplets": 12345,
+  "triplets": [
     {
-      "key": 0,
-      "value": {
-        "rotation": [[r00, r01, r02], [r10, r11, r12], [r20, r21, r22]],
-        "center": [cx, cy, cz]
-      }
+      "triplet_id": 0,
+      "pose_i": 10,
+      "pose_j": 14,
+      "pose_k": 19
     }
-  ],
-  "structure": [
-    {
-      "key": 1234,
-      "value": {
-        "X": [x, y, z],
-        "observations": [
-          {
-            "key": 10,
-            "value": {
-              "id_feat": 102,
-              "x": [u, v]
-            }
-          }
-        ]
-      }
-    }
-  ],
-  "control_points": []
+  ]
 }
 ```
 
-Field notes:
-- `extrinsics`: final solved camera poses.
-- `structure`: final 3D landmarks and 2D feature observations (`id_feat`).
-- `observations[*].key`: view ID; `id_feat`: feature index in that view.
-
-Note:
-- This is the full scene representation, not a compact debug-specific schema.
+Field meanings:
+- `triplet_id`: index in the generated candidate triplet array.
+- `pose_i`, `pose_j`, `pose_k`: pose IDs forming the candidate triplet.
 
 ## File: `sfm_debug_triplet_wise_matches.json`
 
@@ -393,10 +391,63 @@ These files reuse the same header/schema as `camera_poses_after_translation_aver
 - `camera_poses_after_ba_final.csv`:
   final BA output after outlier cleanup.
 
+## File: `sfm_data_expanded.json`
+
+When written:
+- Final export stage in `main_SfM.cpp` (alongside `sfm_data.bin`), after all global SfM filtering/BA stages.
+
+Purpose:
+- Full final reconstruction in OpenMVG JSON format (`ESfM_Data(ALL)`).
+
+Schema:
+```json
+{
+  "root_path": "...",
+  "views": [/* same style as sfm_data.json */],
+  "intrinsics": [/* camera models + params */],
+  "extrinsics": [
+    {
+      "key": 0,
+      "value": {
+        "rotation": [[r00, r01, r02], [r10, r11, r12], [r20, r21, r22]],
+        "center": [cx, cy, cz]
+      }
+    }
+  ],
+  "structure": [
+    {
+      "key": 1234,
+      "value": {
+        "X": [x, y, z],
+        "observations": [
+          {
+            "key": 10,
+            "value": {
+              "id_feat": 102,
+              "x": [u, v]
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "control_points": []
+}
+```
+
+Field notes:
+- `extrinsics`: final solved camera poses.
+- `structure`: final 3D landmarks and 2D feature observations (`id_feat`).
+- `observations[*].key`: view ID; `id_feat`: feature index in that view.
+
+Note:
+- This is the full scene representation, not a compact debug-specific schema.
+
 ## Stage Mapping Summary
 
 - Loaded matches: `sfm_debug_matches_loaded.json`
 - Post-exclusion matches: `sfm_debug_matches_after_exclusions.json`
+- Candidate triplets (global): `sfm_debug_candidate_triplets.json`
 - Triplet-wise matches (global): `sfm_debug_triplet_wise_matches.json`
 - Tracks after min length 3 (global): `sfm_debug_tracks_filtered_len3.json`
 - Structure after triangulation (global): `sfm_debug_structure_after_triangulation.json`
