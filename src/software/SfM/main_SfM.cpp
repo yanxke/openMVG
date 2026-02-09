@@ -51,6 +51,47 @@ using namespace openMVG;
 using namespace openMVG::cameras;
 using namespace openMVG::sfm;
 
+void DumpPairWiseMatchesJson(
+  const std::string & path,
+  const matching::PairWiseMatches & pairwise_matches)
+{
+  OPENMVG_LOG_INFO << "Writing debug JSON: " << path;
+  std::ofstream os(path.c_str());
+  if (!os.is_open())
+  {
+    OPENMVG_LOG_WARNING << "Cannot write debug matches JSON: " << path;
+    return;
+  }
+
+  os << "{\n";
+  os << "  \"num_pairs\": " << pairwise_matches.size() << ",\n";
+  os << "  \"pairs\": [\n";
+  bool first_pair = true;
+  for (const auto & pair_entry : pairwise_matches)
+  {
+    if (!first_pair)
+      os << ",\n";
+    first_pair = false;
+    const Pair & pair = pair_entry.first;
+    const matching::IndMatches & matches = pair_entry.second;
+    os << "    {\"i\": " << pair.first
+       << ", \"j\": " << pair.second
+       << ", \"num_matches\": " << matches.size()
+       << ", \"matches\": [";
+    bool first_match = true;
+    for (const auto & m : matches)
+    {
+      if (!first_match)
+        os << ", ";
+      first_match = false;
+      os << "[" << m.i_ << ", " << m.j_ << "]";
+    }
+    os << "]}";
+  }
+  os << "\n  ]\n";
+  os << "}\n";
+}
+
 bool computeMedianSensorWidthMm(const SfM_Data & sfm_data, double & median_sensor_width_mm, size_t & sample_count)
 {
   std::vector<double> sensor_widths_mm;
@@ -686,6 +727,12 @@ int main(int argc, char **argv)
     OPENMVG_LOG_ERROR << "Cannot load the match file.";
     return EXIT_FAILURE;
   }
+  if (!directory_output.empty())
+  {
+    DumpPairWiseMatchesJson(
+      stlplus::create_filespec(directory_output, "sfm_debug_matches_loaded", "json"),
+      matches_provider->pairWise_matches_);
+  }
 
   if (excluded_pairs_file.empty())
   {
@@ -729,6 +776,12 @@ int main(int argc, char **argv)
                        << ", invalid entries ignored: " << invalid_entries
                        << ", remaining match pairs: " << matches_provider->pairWise_matches_.size();
     }
+  }
+  if (!directory_output.empty())
+  {
+    DumpPairWiseMatchesJson(
+      stlplus::create_filespec(directory_output, "sfm_debug_matches_after_exclusions", "json"),
+      matches_provider->pairWise_matches_);
   }
 
   std::unique_ptr<SfMSceneInitializer> scene_initializer;
@@ -905,9 +958,24 @@ int main(int argc, char **argv)
 
     //-- Export to disk computed scene (data & viewable results)
     OPENMVG_LOG_INFO << "...Export SfM_Data to disk.";
-    Save(sfm_engine->Get_SfM_Data(),
-       stlplus::create_filespec(directory_output, "sfm_data", ".bin"),
-       ESfM_Data(ALL));
+    if (!Save(sfm_engine->Get_SfM_Data(),
+        stlplus::create_filespec(directory_output, "sfm_data", ".bin"),
+        ESfM_Data(ALL)))
+    {
+      OPENMVG_LOG_ERROR << "Cannot save sfm_data.bin";
+      return EXIT_FAILURE;
+    }
+
+    const std::string sfm_data_expanded_json_path =
+      stlplus::create_filespec(directory_output, "sfm_data_expanded", ".json");
+    OPENMVG_LOG_INFO << "Writing debug JSON: " << sfm_data_expanded_json_path;
+    if (!Save(sfm_engine->Get_SfM_Data(),
+        sfm_data_expanded_json_path,
+        ESfM_Data(ALL)))
+    {
+      OPENMVG_LOG_ERROR << "Cannot save sfm_data_expanded.json";
+      return EXIT_FAILURE;
+    }
 
     Save(sfm_engine->Get_SfM_Data(),
        stlplus::create_filespec(directory_output, "cloud_and_poses", ".ply"),

@@ -273,6 +273,123 @@ void WriteRelativeRotationsCsv(const std::string & path,
   }
 }
 
+void DumpPairWiseMatchesJson(
+  const std::string & path,
+  const openMVG::matching::PairWiseMatches & pairwise_matches)
+{
+  OPENMVG_LOG_INFO << "Writing debug JSON: " << path;
+  std::ofstream os(path.c_str());
+  if (!os.is_open())
+  {
+    OPENMVG_LOG_WARNING << "Cannot write debug matches JSON: " << path;
+    return;
+  }
+
+  os << "{\n";
+  os << "  \"num_pairs\": " << pairwise_matches.size() << ",\n";
+  os << "  \"pairs\": [\n";
+  bool first_pair = true;
+  for (const auto & pair_entry : pairwise_matches)
+  {
+    if (!first_pair)
+      os << ",\n";
+    first_pair = false;
+    const openMVG::Pair & pair = pair_entry.first;
+    const openMVG::matching::IndMatches & matches = pair_entry.second;
+    os << "    {\"i\": " << pair.first
+       << ", \"j\": " << pair.second
+       << ", \"num_matches\": " << matches.size()
+       << ", \"matches\": [";
+    bool first_match = true;
+    for (const auto & m : matches)
+    {
+      if (!first_match)
+        os << ", ";
+      first_match = false;
+      os << "[" << m.i_ << ", " << m.j_ << "]";
+    }
+    os << "]}";
+  }
+  os << "\n  ]\n";
+  os << "}\n";
+}
+
+void DumpTracksJson(
+  const std::string & path,
+  const openMVG::tracks::STLMAPTracks & tracks)
+{
+  OPENMVG_LOG_INFO << "Writing debug JSON: " << path;
+  std::ofstream os(path.c_str());
+  if (!os.is_open())
+  {
+    OPENMVG_LOG_WARNING << "Cannot write debug tracks JSON: " << path;
+    return;
+  }
+
+  os << "{\n";
+  os << "  \"num_tracks\": " << tracks.size() << ",\n";
+  os << "  \"tracks\": [\n";
+  bool first_track = true;
+  for (const auto & t : tracks)
+  {
+    if (!first_track)
+      os << ",\n";
+    first_track = false;
+    os << "    {\"track_id\": " << t.first << ", \"observations\": [";
+    bool first_obs = true;
+    for (const auto & obs : t.second)
+    {
+      if (!first_obs)
+        os << ", ";
+      first_obs = false;
+      os << "{\"view_id\": " << obs.first << ", \"feat_id\": " << obs.second << "}";
+    }
+    os << "]}";
+  }
+  os << "\n  ]\n";
+  os << "}\n";
+}
+
+void DumpStructureObservationsJson(
+  const std::string & path,
+  const openMVG::sfm::SfM_Data & sfm_data)
+{
+  OPENMVG_LOG_INFO << "Writing debug JSON: " << path;
+  std::ofstream os(path.c_str());
+  if (!os.is_open())
+  {
+    OPENMVG_LOG_WARNING << "Cannot write debug structure JSON: " << path;
+    return;
+  }
+
+  const openMVG::sfm::Landmarks & landmarks = sfm_data.GetLandmarks();
+  os << "{\n";
+  os << "  \"num_landmarks\": " << landmarks.size() << ",\n";
+  os << "  \"landmarks\": [\n";
+  bool first_landmark = true;
+  for (const auto & lm : landmarks)
+  {
+    if (!first_landmark)
+      os << ",\n";
+    first_landmark = false;
+    const openMVG::sfm::Observations & obs = lm.second.obs;
+    os << "    {\"landmark_id\": " << lm.first
+       << ", \"num_observations\": " << obs.size()
+       << ", \"observations\": [";
+    bool first_obs = true;
+    for (const auto & o : obs)
+    {
+      if (!first_obs)
+        os << ", ";
+      first_obs = false;
+      os << "{\"view_id\": " << o.first << ", \"feat_id\": " << o.second.id_feat << "}";
+    }
+    os << "]}";
+  }
+  os << "\n  ]\n";
+  os << "}\n";
+}
+
 } // namespace
 
 namespace openMVG{
@@ -387,6 +504,12 @@ bool GlobalSfMReconstructionEngine_RelativeMotions::Process() {
   {
     OPENMVG_LOG_ERROR << "GlobalSfM:: Translation Averaging failure!";
     return false;
+  }
+  if (!sOut_directory_.empty())
+  {
+    DumpPairWiseMatchesJson(
+      stlplus::create_filespec(sOut_directory_, "sfm_debug_triplet_wise_matches", "json"),
+      tripletWise_matches);
   }
   if (!Compute_Initial_Structure(tripletWise_matches))
   {
@@ -789,6 +912,12 @@ bool GlobalSfMReconstructionEngine_RelativeMotions::Compute_Initial_Structure
     tracksBuilder.Filter(3);
     STLMAPTracks map_selectedTracks; // reconstructed track (visibility per 3D point)
     tracksBuilder.ExportToSTL(map_selectedTracks);
+    if (!sOut_directory_.empty())
+    {
+      DumpTracksJson(
+        stlplus::create_filespec(sOut_directory_, "sfm_debug_tracks_filtered_len3", "json"),
+        map_selectedTracks);
+    }
 
     // Fill sfm_data with the computed tracks (no 3D yet)
     Landmarks & structure = sfm_data_.structure;
@@ -839,6 +968,12 @@ bool GlobalSfMReconstructionEngine_RelativeMotions::Compute_Initial_Structure
     OPENMVG_LOG_INFO << "\n#removed tracks (invalid triangulation): " <<
       trackCountBefore - IndexT(sfm_data_.GetLandmarks().size());
     OPENMVG_LOG_INFO << "Triangulation took (s): " << timer.elapsed();
+    if (!sOut_directory_.empty())
+    {
+      DumpStructureObservationsJson(
+        stlplus::create_filespec(sOut_directory_, "sfm_debug_structure_after_triangulation", "json"),
+        sfm_data_);
+    }
 
     // Export initial structure
     if (!sLogging_file_.empty())
@@ -995,6 +1130,12 @@ bool GlobalSfMReconstructionEngine_RelativeMotions::Adjust()
     OPENMVG_LOG_INFO << "Point_cloud cleaning:\n"
       << "\t #3DPoints: " << pointcount_cleaning << "\n";
   }
+  if (!sOut_directory_.empty())
+  {
+    DumpStructureObservationsJson(
+      stlplus::create_filespec(sOut_directory_, "sfm_debug_structure_after_outlier_cleanup", "json"),
+      sfm_data_);
+  }
 
   // --
   // Final BA. We refine one more time,
@@ -1025,6 +1166,9 @@ bool GlobalSfMReconstructionEngine_RelativeMotions::Adjust()
     const std::string csv_path =
       stlplus::create_filespec(sOut_directory_, "camera_poses_after_ba_final", "csv");
     WritePosesCsv(csv_path, sfm_data_);
+    DumpStructureObservationsJson(
+      stlplus::create_filespec(sOut_directory_, "sfm_debug_structure_after_final_ba", "json"),
+      sfm_data_);
   }
   return b_BA_Status;
 }
