@@ -34,11 +34,15 @@
 #include "third_party/cmdLine/cmdLine.h"
 #include "third_party/stlplus3/filesystemSimplified/file_system.hpp"
 
+#include <cereal/external/rapidjson/document.h>
+#include <cereal/external/rapidjson/istreamwrapper.h>
 #include <glog/logging.h>
 
 #include <algorithm>
 #include <cstdlib>
+#include <fstream>
 #include <memory>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -119,6 +123,108 @@ bool computeMedianSensorWidthMm(const SfM_Data & sfm_data, double & median_senso
     const size_t mid = sensor_widths_mm.size() / 2;
     median_sensor_width_mm = 0.5 * (sensor_widths_mm[mid - 1] + sensor_widths_mm[mid]);
   }
+  return true;
+}
+
+bool LoadExcludedPairsJson(
+  const std::string & exclusions_file,
+  std::set<Pair> & excluded_pairs,
+  size_t & invalid_entries)
+{
+  invalid_entries = 0;
+  excluded_pairs.clear();
+
+  std::ifstream ifs(exclusions_file.c_str());
+  if (!ifs.is_open())
+  {
+    OPENMVG_LOG_ERROR << "Could not open exclusions file: " << exclusions_file;
+    return false;
+  }
+
+  rapidjson::IStreamWrapper isw(ifs);
+  rapidjson::Document doc;
+  doc.ParseStream(isw);
+  if (doc.HasParseError())
+  {
+    OPENMVG_LOG_ERROR << "Failed to parse exclusions JSON: " << exclusions_file;
+    return false;
+  }
+
+  const rapidjson::Value * pairs_value = nullptr;
+  if (doc.IsObject() && doc.HasMember("excluded_pairs"))
+  {
+    pairs_value = &doc["excluded_pairs"];
+  }
+  else if (doc.IsArray())
+  {
+    pairs_value = &doc;
+  }
+  else
+  {
+    OPENMVG_LOG_ERROR << "Invalid exclusions JSON root. Expected object with excluded_pairs or array.";
+    return false;
+  }
+
+  if (!pairs_value->IsArray())
+  {
+    OPENMVG_LOG_ERROR << "Invalid exclusions JSON: excluded_pairs must be an array.";
+    return false;
+  }
+
+  auto parseIndex = [](const rapidjson::Value & value, IndexT & out) -> bool
+  {
+    if (value.IsUint())
+    {
+      out = static_cast<IndexT>(value.GetUint());
+      return true;
+    }
+    if (value.IsInt() && value.GetInt() >= 0)
+    {
+      out = static_cast<IndexT>(value.GetInt());
+      return true;
+    }
+    if (value.IsUint64())
+    {
+      out = static_cast<IndexT>(value.GetUint64());
+      return true;
+    }
+    if (value.IsInt64() && value.GetInt64() >= 0)
+    {
+      out = static_cast<IndexT>(value.GetInt64());
+      return true;
+    }
+    return false;
+  };
+
+  for (rapidjson::SizeType i = 0; i < pairs_value->Size(); ++i)
+  {
+    const rapidjson::Value & item = (*pairs_value)[i];
+    IndexT id1 = UndefinedIndexT;
+    IndexT id2 = UndefinedIndexT;
+    bool ok = false;
+
+    if (item.IsArray() && item.Size() == 2)
+    {
+      ok = parseIndex(item[0], id1) && parseIndex(item[1], id2);
+    }
+    else if (item.IsObject() && item.HasMember("id1") && item.HasMember("id2"))
+    {
+      ok = parseIndex(item["id1"], id1) && parseIndex(item["id2"], id2);
+    }
+
+    if (!ok || id1 == id2)
+    {
+      ++invalid_entries;
+      continue;
+    }
+
+    if (id2 < id1)
+    {
+      std::swap(id1, id2);
+    }
+    excluded_pairs.insert(Pair(id1, id2));
+  }
+
   return true;
 }
 
@@ -274,6 +380,7 @@ int main(int argc, char **argv)
   double imu_rotation_max_error = 45.0;
   double imu_rotation_histogram_bucket = 10.0;
   bool imu_rotation_filter_outliers = true;
+  std::string excluded_pairs_file;
 
 
   // Common options
@@ -304,6 +411,7 @@ int main(int argc, char **argv)
   cmd.add( make_option('U', imu_rotation_max_error, "imu_rotation_max_error") );
   cmd.add( make_option('H', imu_rotation_histogram_bucket, "imu_rotation_histogram_bucket") );
   cmd.add( make_option('q', imu_rotation_filter_outliers, "imu_rotation_filter_outliers") );
+  cmd.add( make_option('E', excluded_pairs_file, "excluded_pairs_file") );
   // Stellar SfM
   std::string graph_simplification = "MST_X";
   int graph_simplification_value = 5;
@@ -409,6 +517,7 @@ int main(int argc, char **argv)
       << "\t[-H|--imu_rotation_histogram_bucket] Histogram bucket size in degrees (default: " << imu_rotation_histogram_bucket << ")\n"
       << "\t[-q|--imu_rotation_filter_outliers] Remove IMU priors above max error and rerun rotation averaging "
       << "(default: " << (imu_rotation_filter_outliers ? "true" : "false") << ", set to 0 to disable)\n"
+      << "\t[-E|--excluded_pairs_file] JSON file with excluded image pairs (excluded_pairs: [[id1,id2],...])\n"
       << "[STELLAR]\n"
       << "\t[-G|--graph_simplification]\n"
       << "\t\t -> NONE\n"
@@ -576,6 +685,50 @@ int main(int argc, char **argv)
   {
     OPENMVG_LOG_ERROR << "Cannot load the match file.";
     return EXIT_FAILURE;
+  }
+
+  if (excluded_pairs_file.empty())
+  {
+    OPENMVG_LOG_INFO << "No exclusions file provided (--excluded_pairs_file not set).";
+  }
+  else if (!stlplus::is_file(excluded_pairs_file))
+  {
+    OPENMVG_LOG_WARNING << "Exclusions file not found, skipping: " << excluded_pairs_file;
+  }
+  else
+  {
+    std::set<Pair> excluded_pairs;
+    size_t invalid_entries = 0;
+    if (!LoadExcludedPairsJson(excluded_pairs_file, excluded_pairs, invalid_entries))
+    {
+      OPENMVG_LOG_WARNING << "Failed to read exclusions file, proceeding without exclusions: "
+                          << excluded_pairs_file;
+    }
+    else
+    {
+      size_t requested = excluded_pairs.size();
+      size_t removed = 0;
+      size_t missing = 0;
+      for (const Pair & pair : excluded_pairs)
+      {
+        const auto it = matches_provider->pairWise_matches_.find(pair);
+        if (it != matches_provider->pairWise_matches_.end())
+        {
+          matches_provider->pairWise_matches_.erase(it);
+          ++removed;
+        }
+        else
+        {
+          ++missing;
+        }
+      }
+      OPENMVG_LOG_INFO << "Exclusions file read: " << excluded_pairs_file;
+      OPENMVG_LOG_INFO << "Excluded pairs requested: " << requested
+                       << ", applied (removed from matches): " << removed
+                       << ", not present in matches: " << missing
+                       << ", invalid entries ignored: " << invalid_entries
+                       << ", remaining match pairs: " << matches_provider->pairWise_matches_.size();
+    }
   }
 
   std::unique_ptr<SfMSceneInitializer> scene_initializer;
