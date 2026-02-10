@@ -645,13 +645,6 @@ int main( int argc, char** argv )
 
     OPENMVG_LOG_INFO << "\nTask done in (s): " << timer.elapsed();
 
-    //-- export Adjacency matrix
-    OPENMVG_LOG_INFO <<  "\n Export Adjacency Matrix of the pairwise's geometric matches";
-
-    PairWiseMatchingToAdjacencyMatrixSVG( sfm_data.GetViews().size(),
-                                          map_GeometricMatches,
-                                          stlplus::create_filespec( sMatchesDirectory, "GeometricAdjacencyMatrix", "svg" ) );
-
     const Pair_Set outputPairs = getPairs( map_GeometricMatches );
 
     //-- export view pair graph once geometric filter have been done
