@@ -10,6 +10,7 @@
 
 #include "openMVG/cameras/Camera_Common.hpp"
 #include "openMVG/exif/exif_IO_EasyExif.hpp"
+#include "openMVG/graph/connectedComponent.hpp"
 #include "openMVG/graph/graph.hpp"
 #include "openMVG/features/feature.hpp"
 #include "openMVG/matching/indMatch.hpp"
@@ -160,6 +161,111 @@ std::string ViewImagePath(const openMVG::sfm::SfM_Data & sfm_data, openMVG::Inde
   if (it == sfm_data.GetViews().end() || !it->second)
     return std::string();
   return it->second->s_Img_path;
+}
+
+std::string EscapeCsvField(const std::string & value)
+{
+  if (value.find_first_of(",\"\n\r") == std::string::npos)
+  {
+    return value;
+  }
+
+  std::string escaped = "\"";
+  for (const char c : value)
+  {
+    if (c == '"')
+    {
+      escaped += "\"\"";
+    }
+    else
+    {
+      escaped += c;
+    }
+  }
+  escaped += "\"";
+  return escaped;
+}
+
+void WriteNonMainComponentsCsv(
+  const std::string & path,
+  const openMVG::sfm::SfM_Data & sfm_data,
+  const openMVG::Pair_Set & pairs)
+{
+  if (pairs.empty())
+  {
+    return;
+  }
+
+  openMVG::graph::indexedGraph putative_graph(pairs);
+  using Graph = openMVG::graph::indexedGraph::GraphT;
+  using EdgeMap = Graph::EdgeMap<bool>;
+  EdgeMap cut_map(putative_graph.g);
+
+  if (lemon::biEdgeConnectedCutEdges(putative_graph.g, cut_map) > 0)
+  {
+    using EdgeIterator = Graph::EdgeIt;
+    EdgeIterator edge_it(putative_graph.g);
+    for (EdgeMap::MapIt map_it(cut_map); map_it != lemon::INVALID; ++map_it, ++edge_it)
+    {
+      if (*map_it)
+      {
+        putative_graph.g.erase(edge_it);
+      }
+    }
+  }
+
+  const std::map<openMVG::IndexT, std::set<Graph::Node>> components =
+    openMVG::graph::exportGraphToMapSubgraphs<Graph, openMVG::IndexT>(putative_graph.g);
+  if (components.size() <= 1)
+  {
+    return;
+  }
+
+  openMVG::IndexT largest_component_id = openMVG::UndefinedIndexT;
+  size_t largest_size = 0;
+  for (const auto & component_it : components)
+  {
+    if (component_it.second.size() > largest_size)
+    {
+      largest_size = component_it.second.size();
+      largest_component_id = component_it.first;
+    }
+  }
+
+  OPENMVG_LOG_INFO << "Writing CSV: " << path;
+  std::ofstream csv(path.c_str());
+  if (!csv.is_open())
+  {
+    OPENMVG_LOG_WARNING << "Cannot write non-main-components CSV: " << path;
+    return;
+  }
+
+  csv << "component_id,camera_id,image_id,image_name\n";
+  for (const auto & component_it : components)
+  {
+    if (component_it.first == largest_component_id)
+    {
+      continue;
+    }
+
+    for (const auto & node : component_it.second)
+    {
+      const openMVG::IndexT image_id = (*putative_graph.node_map_id)[node];
+      openMVG::IndexT camera_id = openMVG::UndefinedIndexT;
+      std::string image_name;
+      const auto view_it = sfm_data.GetViews().find(image_id);
+      if (view_it != sfm_data.GetViews().end() && view_it->second)
+      {
+        camera_id = view_it->second->id_pose;
+        image_name = view_it->second->s_Img_path;
+      }
+
+      csv << component_it.first << ","
+          << camera_id << ","
+          << image_id << ","
+          << EscapeCsvField(image_name) << "\n";
+    }
+  }
 }
 
 void WriteRotationsCsv(const std::string & path,
@@ -480,6 +586,13 @@ bool GlobalSfMReconstructionEngine_RelativeMotions::Process() {
   {
     const Pair_Set pairs = matches_provider_->getPairs();
     const std::set<IndexT> set_remainingIds = graph::CleanGraph_KeepLargestBiEdge_Nodes<Pair_Set, IndexT>(pairs);
+    if (!sOut_directory_.empty())
+    {
+      WriteNonMainComponentsCsv(
+        stlplus::create_filespec(sOut_directory_, "sfm_non_main_components", "csv"),
+        sfm_data_,
+        pairs);
+    }
     if (set_remainingIds.empty())
     {
       OPENMVG_LOG_WARNING << "Invalid input image graph for global SfM";
