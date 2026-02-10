@@ -9,7 +9,9 @@
 #ifndef OPENMVG_SFM_SFM_FEATURES_PROVIDER_HPP
 #define OPENMVG_SFM_SFM_FEATURES_PROVIDER_HPP
 
+#include <fstream>
 #include <memory>
+#include <sstream>
 #include <string>
 
 #include "openMVG/features/feature.hpp"
@@ -71,6 +73,73 @@ struct Features_Provider
         {
           // save loaded Features as PointFeature
           feats_per_view[iter->second->id_view] = regions->GetRegionsPositions();
+        }
+        ++my_progress_bar;
+      }
+    }
+    return bContinue;
+  }
+
+  /// Lightweight feature loader that only reads 2D keypoint positions (x, y).
+  /// This is enough for SfM pipelines that never need scale/orientation.
+  virtual bool load_2d_positions_only(
+    const SfM_Data & sfm_data,
+    const std::string & feat_directory)
+  {
+    system::LoggerProgress my_progress_bar(sfm_data.GetViews().size(), "- Features Loading (light) -");
+    bool bContinue = true;
+#ifdef OPENMVG_USE_OPENMP
+    #pragma omp parallel
+#endif
+    for (Views::const_iterator iter = sfm_data.GetViews().begin();
+      iter != sfm_data.GetViews().end() && bContinue; ++iter)
+    {
+#ifdef OPENMVG_USE_OPENMP
+    #pragma omp single nowait
+#endif
+      {
+        const std::string sImageName = stlplus::create_filespec(sfm_data.s_root_path, iter->second->s_Img_path);
+        const std::string basename = stlplus::basename_part(sImageName);
+        const std::string featFile = stlplus::create_filespec(feat_directory, basename, ".feat");
+
+        features::PointFeatures points;
+        std::ifstream file(featFile.c_str());
+        if (!file.is_open())
+        {
+          OPENMVG_LOG_ERROR << "Invalid feature files for the view: " << sImageName;
+#ifdef OPENMVG_USE_OPENMP
+      #pragma omp critical
+#endif
+          bContinue = false;
+        }
+        else
+        {
+          std::string line;
+          while (std::getline(file, line))
+          {
+            std::istringstream iss(line);
+            float x = 0.0f;
+            float y = 0.0f;
+            if (!(iss >> x >> y))
+            {
+              continue; // Ignore empty/invalid lines.
+            }
+            points.emplace_back(x, y);
+          }
+          if (file.bad())
+          {
+            OPENMVG_LOG_ERROR << "Cannot read feature file for the view: " << sImageName;
+#ifdef OPENMVG_USE_OPENMP
+      #pragma omp critical
+#endif
+            bContinue = false;
+          }
+        }
+#ifdef OPENMVG_USE_OPENMP
+      #pragma omp critical
+#endif
+        {
+          feats_per_view[iter->second->id_view] = std::move(points);
         }
         ++my_progress_bar;
       }

@@ -709,9 +709,23 @@ int main(int argc, char **argv)
 
   // Features reading
   std::shared_ptr<Features_Provider> feats_provider = std::make_shared<Features_Provider>();
-  if (!feats_provider->load(sfm_data, directory_match, regions_type)) {
-    OPENMVG_LOG_ERROR << "Cannot load view corresponding features in directory: " << directory_match << ".";
-    return EXIT_FAILURE;
+  const bool use_light_feature_loading = (sfm_engine_type == ESfMEngine::GLOBAL);
+  if (use_light_feature_loading)
+  {
+    OPENMVG_LOG_INFO << "Using light feature loading for GLOBAL SfM (x,y only).";
+    if (!feats_provider->load_2d_positions_only(sfm_data, directory_match))
+    {
+      OPENMVG_LOG_ERROR << "Cannot load view corresponding features in directory: " << directory_match << ".";
+      return EXIT_FAILURE;
+    }
+  }
+  else
+  {
+    if (!feats_provider->load(sfm_data, directory_match, regions_type))
+    {
+      OPENMVG_LOG_ERROR << "Cannot load view corresponding features in directory: " << directory_match << ".";
+      return EXIT_FAILURE;
+    }
   }
   // Matches reading
   std::shared_ptr<Matches_Provider> matches_provider = std::make_shared<Matches_Provider>();
