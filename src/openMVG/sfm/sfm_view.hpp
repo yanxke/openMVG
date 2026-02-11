@@ -31,6 +31,10 @@ struct View
   // image size
   IndexT ui_width, ui_height;
 
+  // Image capture timestamp from EXIF metadata (if available).
+  bool b_has_capture_time_ = false;
+  std::string capture_time_;
+
   // Constructor (use unique index for the view_id)
   View(
     const std::string & sImgPath = "",

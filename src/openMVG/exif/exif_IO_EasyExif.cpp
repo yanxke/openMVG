@@ -247,5 +247,43 @@ bool Exif_IO_EasyExif::UserComment(std::string * comment) const
   return false;
 }
 
+bool Exif_IO_EasyExif::DateTime(std::string * date_time) const
+{
+  const std::string date_time_original = trim_copy((*pimpl_).get().DateTimeOriginal);
+  if (!date_time_original.empty())
+  {
+    (*date_time) = date_time_original;
+    return true;
+  }
+
+  const std::string date_time_digitized = trim_copy((*pimpl_).get().DateTimeDigitized);
+  if (!date_time_digitized.empty())
+  {
+    (*date_time) = date_time_digitized;
+    return true;
+  }
+
+  const std::string date_time_fallback = trim_copy((*pimpl_).get().DateTime);
+  if (!date_time_fallback.empty())
+  {
+    (*date_time) = date_time_fallback;
+    return true;
+  }
+
+  return false;
+}
+
+bool Exif_IO_EasyExif::SubSecTime(std::string * subsec_time) const
+{
+  const std::string subsec_time_original = trim_copy((*pimpl_).get().SubSecTimeOriginal);
+  if (!subsec_time_original.empty())
+  {
+    (*subsec_time) = subsec_time_original;
+    return true;
+  }
+
+  return false;
+}
+
 } // namespace exif
 } // namespace openMVG

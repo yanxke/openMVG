@@ -145,6 +145,29 @@ bool ParseXmpStepCounter(const std::string & filename, int & step_counter)
   }
 }
 
+bool ParseExifCaptureTime(
+  const std::string & filename,
+  std::string & capture_time)
+{
+  std::unique_ptr<Exif_IO> exifReader(new Exif_IO_EasyExif);
+  if (!exifReader->open(filename))
+  {
+    return false;
+  }
+
+  if (!exifReader->DateTime(&capture_time))
+  {
+    return false;
+  }
+
+  std::string capture_time_subsec;
+  if (exifReader->SubSecTime(&capture_time_subsec))
+  {
+    capture_time += "." + capture_time_subsec;
+  }
+  return true;
+}
+
 /// Check that Kmatrix is a string like "f;0;ppx;0;f;ppy;0;0;1"
 /// With f,ppx,ppy as valid numerical value
 bool checkIntrinsicStringValidity(const std::string & Kmatrix, double & focal, double & ppx, double & ppy)
@@ -625,6 +648,9 @@ int main(int argc, char **argv)
     }
 
     // Build the view corresponding to the image
+    std::string capture_time;
+    const bool has_capture_time = ParseExifCaptureTime(sImageFilename, capture_time);
+
     Vec3 pose_center;
     if (getGPS(sImageFilename, i_GPS_XYZ_method, pose_center) && b_Use_pose_prior)
     {
@@ -681,6 +707,12 @@ int main(int argc, char **argv)
       {
         v.b_has_step_counter_ = true;
         v.step_counter_ = step_counter;
+      }
+
+      if (has_capture_time)
+      {
+        v.b_has_capture_time_ = true;
+        v.capture_time_ = capture_time;
       }
 
       // Add the view to the sfm_container
@@ -754,6 +786,12 @@ int main(int argc, char **argv)
           v.step_counter_ = step_counter;
         }
 
+        if (has_capture_time)
+        {
+          v.b_has_capture_time_ = true;
+          v.capture_time_ = capture_time;
+        }
+
         // Add the view to the sfm_container
         views[v.id_view] = std::make_shared<ViewPriors>(v);
       }
@@ -773,6 +811,12 @@ int main(int argc, char **argv)
         {
           // Add the defined intrinsic to the sfm_container
           intrinsics[v.id_intrinsic] = intrinsic;
+        }
+
+        if (has_capture_time)
+        {
+          v.b_has_capture_time_ = true;
+          v.capture_time_ = capture_time;
         }
 
         // Add the view to the sfm_container

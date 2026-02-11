@@ -158,6 +158,18 @@ class Exif_IO_EasyExif : public Exif_IO
     */
     bool UserComment(std::string * comment) const override;
 
+    /**
+    * @brief Try to read the image capture timestamp from EXIF
+    * @return If capture timestamp can be read & exported, return true
+    */
+    bool DateTime(std::string * date_time) const override;
+
+    /**
+    * @brief Try to read sub-second time for the image capture from EXIF
+    * @return If sub-second time can be read & exported, return true
+    */
+    bool SubSecTime(std::string * subsec_time) const override;
+
 
   private:
 

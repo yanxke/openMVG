@@ -148,6 +148,18 @@ class Exif_IO
     */
     virtual bool UserComment(std::string * comment) const = 0;
 
+    /**
+    * @brief Try to read the image capture timestamp from EXIF
+    * @return If capture timestamp can be read & exported, return true
+    */
+    virtual bool DateTime(std::string * date_time) const = 0;
+
+    /**
+    * @brief Try to read sub-second time for the image capture from EXIF
+    * @return If sub-second time can be read & exported, return true
+    */
+    virtual bool SubSecTime(std::string * subsec_time) const = 0;
+
 };
 
 } // namespace exif
