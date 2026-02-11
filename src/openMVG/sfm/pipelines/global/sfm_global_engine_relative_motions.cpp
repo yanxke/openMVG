@@ -345,9 +345,25 @@ void WriteRelativeRotationsCsv(const std::string & path,
   if (!csv)
     return;
 
+  openMVG::Hash_Map<openMVG::IndexT, openMVG::Mat3> imu_pose_rotations;
+  for (const auto & view_it : sfm_data.GetViews())
+  {
+    const openMVG::sfm::View * view = view_it.second.get();
+    if (!view || view->id_pose == openMVG::UndefinedIndexT)
+      continue;
+
+    const auto * view_priors =
+      dynamic_cast<const openMVG::sfm::ViewPriors *>(view);
+    if (!view_priors || !view_priors->b_has_imu_rotation_)
+      continue;
+
+    imu_pose_rotations[view->id_pose] = view_priors->imu_rotation_;
+  }
+
   const auto pose_to_view = BuildPoseToViewMap(sfm_data);
 
-  csv << "pose_i,pose_j,view_i,view_j,image_i,image_j,qw,qx,qy,qz,weight\n";
+  csv << "pose_i,pose_j,view_i,view_j,image_i,image_j,qw,qx,qy,qz,weight,"
+         "imu_relative_rotation_error_deg,imu_relative_rotation_error_mode\n";
   csv << std::fixed << std::setprecision(10);
   for (const auto & rel : relatives_R)
   {
@@ -371,11 +387,31 @@ void WriteRelativeRotationsCsv(const std::string & path,
       image_j = ViewImagePath(sfm_data, view_j);
     }
 
+    std::string err_deg_csv;
+    std::string err_mode_csv;
+    const auto imu_i_it = imu_pose_rotations.find(rel.i);
+    const auto imu_j_it = imu_pose_rotations.find(rel.j);
+    if (imu_i_it != imu_pose_rotations.end() && imu_j_it != imu_pose_rotations.end())
+    {
+      const openMVG::Mat3 rel_imu = imu_j_it->second * imu_i_it->second.transpose();
+      const double err_direct_deg = RotationAngularErrorDeg(rel.Rij, rel_imu);
+      const double err_transpose_deg = RotationAngularErrorDeg(rel.Rij.transpose(), rel_imu);
+      const double err_deg = std::min(err_direct_deg, err_transpose_deg);
+      const char * mode = (err_direct_deg <= err_transpose_deg) ? "direct" : "transpose";
+
+      std::ostringstream err_ss;
+      err_ss << std::fixed << std::setprecision(10) << err_deg;
+      err_deg_csv = err_ss.str();
+      err_mode_csv = mode;
+    }
+
     csv << rel.i << "," << rel.j << ","
         << view_i << "," << view_j << ","
         << image_i << "," << image_j << ","
         << q.w() << "," << q.x() << "," << q.y() << "," << q.z() << ","
-        << rel.weight << "\n";
+        << rel.weight << ","
+        << err_deg_csv << ","
+        << err_mode_csv << "\n";
   }
 }
 
