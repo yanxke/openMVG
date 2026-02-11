@@ -13,6 +13,7 @@
 #include "third_party/stlplus3/filesystemSimplified/file_system.hpp"
 
 #include <cereal/types/polymorphic.hpp>
+#include <cmath>
 #include <exception>
 
 template <class Archive>
@@ -31,6 +32,14 @@ void openMVG::sfm::View::save( Archive & ar ) const
   if (has_valid_capture_time)
   {
     ar(cereal::make_nvp("capture_time", capture_time_));
+  }
+
+  const bool has_valid_capture_time_epoch =
+    b_has_capture_time_epoch_ && std::isfinite(capture_time_epoch_);
+  ar(cereal::make_nvp("has_capture_time_epoch", has_valid_capture_time_epoch));
+  if (has_valid_capture_time_epoch)
+  {
+    ar(cereal::make_nvp("capture_time_epoch", capture_time_epoch_));
   }
 }
 
@@ -68,6 +77,25 @@ void openMVG::sfm::View::load( Archive & ar )
   {
     b_has_capture_time_ = false;
     capture_time_.clear();
+  }
+
+  try
+  {
+    ar(cereal::make_nvp("has_capture_time_epoch", b_has_capture_time_epoch_));
+    if (b_has_capture_time_epoch_)
+    {
+      ar(cereal::make_nvp("capture_time_epoch", capture_time_epoch_));
+      if (!std::isfinite(capture_time_epoch_))
+      {
+        b_has_capture_time_epoch_ = false;
+        capture_time_epoch_ = 0.0;
+      }
+    }
+  }
+  catch (const std::exception &)
+  {
+    b_has_capture_time_epoch_ = false;
+    capture_time_epoch_ = 0.0;
   }
 }
 

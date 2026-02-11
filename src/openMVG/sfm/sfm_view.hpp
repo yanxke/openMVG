@@ -35,6 +35,10 @@ struct View
   bool b_has_capture_time_ = false;
   std::string capture_time_;
 
+  // Parsed capture time in seconds since Unix epoch (if available).
+  bool b_has_capture_time_epoch_ = false;
+  double capture_time_epoch_ = 0.0;
+
   // Constructor (use unique index for the view_id)
   View(
     const std::string & sImgPath = "",
