@@ -299,28 +299,29 @@ install(TARGETS openMVG_main_SfM DESTINATION bin/)
 # -
 # Use openCV Feature detector to describe the images
 # -
-if(OpenMVG_USE_OPENCV)
-  add_executable(openMVG_main_ComputeFeatures_OpenCV
-    main_ComputeFeatures_OpenCV.cpp)
-  target_link_libraries(openMVG_main_ComputeFeatures_OpenCV
-    openMVG_system
-    openMVG_image
-    openMVG_features
-    openMVG_multiview
-    openMVG_sfm
-    ${STLPLUS_LIBRARY}
-    vlsift
-    ${OpenCV_LIBS})
-  target_include_directories(openMVG_main_ComputeFeatures_OpenCV PRIVATE ${OpenCV_INCLUDE_DIRS})
-
-  if(OpenMVG_USE_OCVSIFT)
-    target_compile_definitions(openMVG_main_ComputeFeatures_OpenCV PRIVATE USE_OCVSIFT)
-  endif(OpenMVG_USE_OCVSIFT)
-
-  set_property(TARGET openMVG_main_ComputeFeatures_OpenCV PROPERTY FOLDER OpenMVG/software)
-  set_property(TARGET openMVG_main_ComputeFeatures_OpenCV PROPERTY INSTALL_RPATH_USE_LINK_PATH TRUE)
-  install(TARGETS openMVG_main_ComputeFeatures_OpenCV DESTINATION bin/)
-endif(OpenMVG_USE_OPENCV)
+# Not used by SfM_GlobalPipeline.py.in (pipeline uses openMVG_main_ComputeFeatures).
+# if(OpenMVG_USE_OPENCV)
+#   add_executable(openMVG_main_ComputeFeatures_OpenCV
+#     main_ComputeFeatures_OpenCV.cpp)
+#   target_link_libraries(openMVG_main_ComputeFeatures_OpenCV
+#     openMVG_system
+#     openMVG_image
+#     openMVG_features
+#     openMVG_multiview
+#     openMVG_sfm
+#     ${STLPLUS_LIBRARY}
+#     vlsift
+#     ${OpenCV_LIBS})
+#   target_include_directories(openMVG_main_ComputeFeatures_OpenCV PRIVATE ${OpenCV_INCLUDE_DIRS})
+#
+#   if(OpenMVG_USE_OCVSIFT)
+#     target_compile_definitions(openMVG_main_ComputeFeatures_OpenCV PRIVATE USE_OCVSIFT)
+#   endif(OpenMVG_USE_OCVSIFT)
+#
+#   set_property(TARGET openMVG_main_ComputeFeatures_OpenCV PROPERTY FOLDER OpenMVG/software)
+#   set_property(TARGET openMVG_main_ComputeFeatures_OpenCV PROPERTY INSTALL_RPATH_USE_LINK_PATH TRUE)
+#   install(TARGETS openMVG_main_ComputeFeatures_OpenCV DESTINATION bin/)
+# endif(OpenMVG_USE_OPENCV)
 
 
 ###
@@ -373,5 +374,5 @@ configure_file(${OPENMVG_TUTORIAL_IN_FILE}
     "${CMAKE_CURRENT_BINARY_DIR}/SfM_SequentialPipeline.py" @ONLY)
 
 # add_subdirectory(clustering)
-# add_subdirectory(export)
+add_subdirectory(export)
 # add_subdirectory(import)

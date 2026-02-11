@@ -21,14 +21,14 @@
 
 # - Export a SfM openMVG scene to openMVS format
 #
-add_executable(openMVG_main_openMVG2openMVS main_openMVG2openMVS.cpp)
-target_link_libraries(openMVG_main_openMVG2openMVS
-  openMVG_system
-  openMVG_image
-  openMVG_features
-  openMVG_sfm
-  ${STLPLUS_LIBRARY}
-)
+# add_executable(openMVG_main_openMVG2openMVS main_openMVG2openMVS.cpp)
+# target_link_libraries(openMVG_main_openMVG2openMVS
+#   openMVG_system
+#   openMVG_image
+#   openMVG_features
+#   openMVG_sfm
+#   ${STLPLUS_LIBRARY}
+# )
 
 # - Export a SfM openMVG scene to CMPMVS format
 #
@@ -116,8 +116,8 @@ target_link_libraries( openMVG_main_openMVG2Colmap
 # installation rules
 # set_property(TARGET openMVG_main_openMVG2PMVS PROPERTY FOLDER OpenMVG/software)
 # install(TARGETS openMVG_main_openMVG2PMVS DESTINATION bin/)
-set_property(TARGET openMVG_main_openMVG2openMVS PROPERTY FOLDER OpenMVG/software)
-install(TARGETS openMVG_main_openMVG2openMVS DESTINATION bin/)
+# set_property(TARGET openMVG_main_openMVG2openMVS PROPERTY FOLDER OpenMVG/software)
+# install(TARGETS openMVG_main_openMVG2openMVS DESTINATION bin/)
 # set_property(TARGET openMVG_main_openMVG2CMPMVS PROPERTY FOLDER OpenMVG/software)
 # install(TARGETS openMVG_main_openMVG2CMPMVS DESTINATION bin/)
 # set_property(TARGET openMVG_main_openMVG2MESHLAB PROPERTY FOLDER OpenMVG/software)
@@ -141,55 +141,55 @@ install(TARGETS openMVG_main_openMVG2Colmap DESTINATION bin/)
 
 # - View extracted Keypoints
 #
-add_executable(openMVG_main_exportKeypoints main_exportKeypoints.cpp)
-target_link_libraries(openMVG_main_exportKeypoints
-  openMVG_system
-  openMVG_features
-  openMVG_sfm
-  ${STLPLUS_LIBRARY}
-)
+# add_executable(openMVG_main_exportKeypoints main_exportKeypoints.cpp)
+# target_link_libraries(openMVG_main_exportKeypoints
+#   openMVG_system
+#   openMVG_features
+#   openMVG_sfm
+#   ${STLPLUS_LIBRARY}
+# )
 
 
 # - View computed matches (putatives, geometrics) per image pair
 #
-add_executable(openMVG_main_exportMatches main_exportMatches.cpp)
-target_link_libraries(openMVG_main_exportMatches
-  openMVG_system
-  openMVG_features
-  openMVG_sfm
-  ${STLPLUS_LIBRARY}
-)
+# add_executable(openMVG_main_exportMatches main_exportMatches.cpp)
+# target_link_libraries(openMVG_main_exportMatches
+#   openMVG_system
+#   openMVG_features
+#   openMVG_sfm
+#   ${STLPLUS_LIBRARY}
+# )
 
 # - View tracks per image pair
 #
-add_executable(openMVG_main_exportTracks main_exportTracks.cpp)
-target_link_libraries(openMVG_main_exportTracks
-  openMVG_system
-  openMVG_features
-  openMVG_sfm
-  ${STLPLUS_LIBRARY}
-)
+# add_executable(openMVG_main_exportTracks main_exportTracks.cpp)
+# target_link_libraries(openMVG_main_exportTracks
+#   openMVG_system
+#   openMVG_features
+#   openMVG_sfm
+#   ${STLPLUS_LIBRARY}
+# )
 
 # - Export undistorted images related to a sfm_data file
 #
-add_executable(openMVG_main_ExportUndistortedImages main_ExportUndistortedImages.cpp)
-target_link_libraries(openMVG_main_ExportUndistortedImages
-  openMVG_system
-  openMVG_image
-  openMVG_features
-  openMVG_sfm
-  ${STLPLUS_LIBRARY}
-)
+# add_executable(openMVG_main_ExportUndistortedImages main_ExportUndistortedImages.cpp)
+# target_link_libraries(openMVG_main_ExportUndistortedImages
+#   openMVG_system
+#   openMVG_image
+#   openMVG_features
+#   openMVG_sfm
+#   ${STLPLUS_LIBRARY}
+# )
 
 # installation rules
-set_property(TARGET openMVG_main_exportKeypoints PROPERTY FOLDER OpenMVG/software)
-install(TARGETS openMVG_main_exportKeypoints DESTINATION bin/)
-set_property(TARGET openMVG_main_exportMatches PROPERTY FOLDER OpenMVG/software)
-install(TARGETS openMVG_main_exportMatches DESTINATION bin/)
-set_property(TARGET openMVG_main_exportTracks PROPERTY FOLDER OpenMVG/software)
-install(TARGETS openMVG_main_exportTracks DESTINATION bin/)
-set_property(TARGET openMVG_main_ExportUndistortedImages PROPERTY FOLDER OpenMVG/software)
-install(TARGETS openMVG_main_ExportUndistortedImages DESTINATION bin/)
+# set_property(TARGET openMVG_main_exportKeypoints PROPERTY FOLDER OpenMVG/software)
+# install(TARGETS openMVG_main_exportKeypoints DESTINATION bin/)
+# set_property(TARGET openMVG_main_exportMatches PROPERTY FOLDER OpenMVG/software)
+# install(TARGETS openMVG_main_exportMatches DESTINATION bin/)
+# set_property(TARGET openMVG_main_exportTracks PROPERTY FOLDER OpenMVG/software)
+# install(TARGETS openMVG_main_exportTracks DESTINATION bin/)
+# set_property(TARGET openMVG_main_ExportUndistortedImages PROPERTY FOLDER OpenMVG/software)
+# install(TARGETS openMVG_main_ExportUndistortedImages DESTINATION bin/)
 
 
 # - Export SfM openMVG camera scene frustums as triangle meshes
