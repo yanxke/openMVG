@@ -49,6 +49,7 @@ public:
     bool filter_outliers,
     double max_error_deg,
     double histogram_bucket_deg);
+  void SetCloseTimeAdaptiveFiltering(bool enabled);
 
   bool Process() override;
 
@@ -98,6 +99,7 @@ private:
   bool imu_rotation_filter_outliers_ = false;
   double imu_rotation_max_error_deg_ = 45.0;
   double imu_rotation_histogram_bucket_deg_ = 10.0;
+  bool close_time_adaptive_filtering_ = true;
 
   Hash_Map<IndexT, Mat3> imu_pose_rotations_;
   bool imu_rotations_loaded_ = false;

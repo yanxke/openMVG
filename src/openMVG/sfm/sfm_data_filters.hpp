@@ -18,6 +18,20 @@ namespace openMVG { namespace sfm { struct SfM_Data; } }
 namespace openMVG {
 namespace sfm {
 
+struct PixelResidualAdaptiveStats
+{
+  IndexT old_logic_outlier_observations = 0;
+  IndexT rescued_observations = 0;
+  IndexT removed_observations = 0;
+};
+
+struct AngleErrorAdaptiveStats
+{
+  IndexT old_logic_outlier_tracks = 0;
+  IndexT rescued_tracks = 0;
+  IndexT removed_tracks = 0;
+};
+
 /// List the view indexes that have valid camera intrinsic and pose.
 std::set<IndexT> Get_Valid_Views
 (
@@ -51,12 +65,37 @@ IndexT RemoveOutliers_PixelResidualError
   const unsigned int minTrackLength = 2
 );
 
+// Remove outlier observations by pixel residual with a relaxed threshold for tracks
+// that contain at least one close-in-time observation pair.
+IndexT RemoveOutliers_PixelResidualErrorAdaptive
+(
+  SfM_Data & sfm_data,
+  const double dThresholdPixel,
+  const double dThresholdPixelCloseTime,
+  const double closeTimeSeconds,
+  PixelResidualAdaptiveStats * stats = nullptr,
+  const unsigned int minTrackLength = 2
+);
+
 // Remove tracks that have a small angle (tracks with tiny angle leads to instable 3D points)
 // Return the number of removed tracks
 IndexT RemoveOutliers_AngleError
 (
   SfM_Data & sfm_data,
   const double dMinAcceptedAngle
+);
+
+// Remove tracks by triangulation angle with a relaxed threshold for close-in-time view pairs.
+// A track is kept if:
+// - max angle over all obs pairs >= dMinAcceptedAngle, OR
+// - it contains at least one close-time obs pair and that pair angle >= dMinAcceptedAngleCloseTime.
+IndexT RemoveOutliers_AngleErrorAdaptive
+(
+  SfM_Data & sfm_data,
+  const double dMinAcceptedAngle,
+  const double dMinAcceptedAngleCloseTime,
+  const double closeTimeSeconds,
+  AngleErrorAdaptiveStats * stats = nullptr
 );
 
 /// Erase pose with insufficient track observations
@@ -79,6 +118,18 @@ bool eraseUnstablePosesAndObservations
   SfM_Data & sfm_data,
   const IndexT min_points_per_pose = 6,
   const IndexT min_points_per_landmark = 2
+);
+
+// Adaptive cleanup:
+// - Uses min_points_per_landmark_default for normal tracks.
+// - Uses min_points_per_landmark_close for tracks that contain at least one close-time view pair.
+bool eraseUnstablePosesAndObservationsAdaptive
+(
+  SfM_Data & sfm_data,
+  const IndexT min_points_per_pose,
+  const IndexT min_points_per_landmark_default,
+  const IndexT min_points_per_landmark_close,
+  const double closeTimeSeconds
 );
 
 /// Tell if the sfm_data structure is one CC or not

@@ -53,6 +53,15 @@
 
 namespace {
 
+constexpr double kCloseTimeSeconds = 0.75;
+// Adaptive angle filter thresholds used when close-time adaptive filtering is enabled.
+// - kDefaultMinTriangulationAngleDeg: legacy minimum triangulation angle.
+// - kCloseTimeMinTriangulationAngleDeg: relaxed minimum angle for close-time observation pairs.
+constexpr double kDefaultMinTriangulationAngleDeg = 2.0;
+constexpr double kCloseTimeMinTriangulationAngleDeg = 1.0;
+constexpr double kDefaultPixelResidualThresholdPx = 4.0;
+constexpr double kCloseTimePixelResidualThresholdPx = 8.0;
+
 bool ParseImuRotationFromUserComment(const std::string & comment, openMVG::Mat3 & rotation_dw)
 {
   const std::string key = "Rotation:";
@@ -114,6 +123,18 @@ double RotationAngularErrorDeg(const openMVG::Mat3 & R_est, const openMVG::Mat3 
 {
   const openMVG::Mat3 R_err = R_est * R_prior.transpose();
   return openMVG::R2D(openMVG::getRotationMagnitude(R_err));
+}
+
+bool AreViewsCloseInTime(
+  const openMVG::sfm::View * view_a,
+  const openMVG::sfm::View * view_b)
+{
+  if (!view_a || !view_b ||
+      !view_a->b_has_capture_time_epoch_ || !view_b->b_has_capture_time_epoch_)
+  {
+    return false;
+  }
+  return std::abs(view_a->capture_time_epoch_ - view_b->capture_time_epoch_) < kCloseTimeSeconds;
 }
 
 openMVG::Mat3 BestFitRotation(const std::vector<std::pair<openMVG::Mat3, openMVG::Mat3>> & pairs)
@@ -614,6 +635,11 @@ void GlobalSfMReconstructionEngine_RelativeMotions::SetImuRotationPrior(
   imu_rotation_histogram_bucket_deg_ = histogram_bucket_deg;
 }
 
+void GlobalSfMReconstructionEngine_RelativeMotions::SetCloseTimeAdaptiveFiltering(bool enabled)
+{
+  close_time_adaptive_filtering_ = enabled;
+}
+
 bool GlobalSfMReconstructionEngine_RelativeMotions::Process() {
 
   //-------------------
@@ -1013,7 +1039,8 @@ bool GlobalSfMReconstructionEngine_RelativeMotions::Compute_Global_Translations
     matches_provider_,
     global_rotations,
     tripletWise_matches,
-    sOut_directory_);
+    sOut_directory_,
+    close_time_adaptive_filtering_);
 
   if (!sOut_directory_.empty())
   {
@@ -1252,14 +1279,63 @@ bool GlobalSfMReconstructionEngine_RelativeMotions::Adjust()
 
   // Remove outliers (max_angle, residual error)
   const size_t pointcount_initial = sfm_data_.structure.size();
-  RemoveOutliers_PixelResidualError(sfm_data_, 4.0);
+  PixelResidualAdaptiveStats pixel_adaptive_stats;
+  AngleErrorAdaptiveStats angle_adaptive_stats;
+  if (close_time_adaptive_filtering_)
+  {
+    RemoveOutliers_PixelResidualErrorAdaptive(
+      sfm_data_,
+      kDefaultPixelResidualThresholdPx,
+      kCloseTimePixelResidualThresholdPx,
+      kCloseTimeSeconds,
+      &pixel_adaptive_stats);
+  }
+  else
+  {
+    RemoveOutliers_PixelResidualError(sfm_data_, kDefaultPixelResidualThresholdPx);
+  }
   const size_t pointcount_pixelresidual_filter = sfm_data_.structure.size();
-  RemoveOutliers_AngleError(sfm_data_, 2.0);
+  if (!sOut_directory_.empty())
+  {
+    DumpStructureObservationsJson(
+      stlplus::create_filespec(sOut_directory_, "sfm_debug_structure_after_pixel_filter", "json"),
+      sfm_data_);
+  }
+  if (close_time_adaptive_filtering_)
+  {
+    RemoveOutliers_AngleErrorAdaptive(
+      sfm_data_,
+      kDefaultMinTriangulationAngleDeg,
+      kCloseTimeMinTriangulationAngleDeg,
+      kCloseTimeSeconds,
+      &angle_adaptive_stats);
+  }
+  else
+  {
+    RemoveOutliers_AngleError(sfm_data_, kDefaultMinTriangulationAngleDeg);
+  }
   const size_t pointcount_angular_filter = sfm_data_.structure.size();
+  if (!sOut_directory_.empty())
+  {
+    DumpStructureObservationsJson(
+      stlplus::create_filespec(sOut_directory_, "sfm_debug_structure_after_angle_filter", "json"),
+      sfm_data_);
+  }
   OPENMVG_LOG_INFO << "Outlier removal (remaining #points):\n"
     << "\t initial structure size #3DPoints: " << pointcount_initial << "\n"
     << "\t\t pixel residual filter  #3DPoints: " << pointcount_pixelresidual_filter << "\n"
     << "\t\t angular filter         #3DPoints: " << pointcount_angular_filter;
+  if (close_time_adaptive_filtering_)
+  {
+    OPENMVG_LOG_INFO
+      << "Close-time adaptive outlier summary:\n"
+      << "-- pixel outliers by old logic: " << pixel_adaptive_stats.old_logic_outlier_observations << "\n"
+      << "-- pixel outliers rescued by relaxed threshold: " << pixel_adaptive_stats.rescued_observations << "\n"
+      << "-- pixel outliers removed by active logic: " << pixel_adaptive_stats.removed_observations << "\n"
+      << "-- angular outlier tracks by old logic: " << angle_adaptive_stats.old_logic_outlier_tracks << "\n"
+      << "-- angular outlier tracks rescued by relaxed threshold: " << angle_adaptive_stats.rescued_tracks << "\n"
+      << "-- angular outlier tracks removed by active logic: " << angle_adaptive_stats.removed_tracks;
+  }
 
   if (!sLogging_file_.empty())
   {
@@ -1270,8 +1346,26 @@ bool GlobalSfMReconstructionEngine_RelativeMotions::Adjust()
 
   // Check that poses & intrinsic cover some measures (after outlier removal)
   const IndexT minPointPerPose = 12; // 6 min
-  const IndexT minTrackLength = 3; // 2 min
-  if (eraseUnstablePosesAndObservations(sfm_data_, minPointPerPose, minTrackLength))
+  const IndexT minTrackLengthDefault = 3; // normal
+  bool cleaned = false;
+  if (close_time_adaptive_filtering_)
+  {
+    const IndexT minTrackLengthCloseTime = minTrackLengthDefault;
+    cleaned = eraseUnstablePosesAndObservationsAdaptive(
+      sfm_data_,
+      minPointPerPose,
+      minTrackLengthDefault,
+      minTrackLengthCloseTime,
+      kCloseTimeSeconds);
+  }
+  else
+  {
+    cleaned = eraseUnstablePosesAndObservations(
+      sfm_data_,
+      minPointPerPose,
+      minTrackLengthDefault);
+  }
+  if (cleaned)
   {
     // TODO: must ensure that track graph is producing a single connected component
 

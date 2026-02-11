@@ -421,6 +421,7 @@ int main(int argc, char **argv)
   double imu_rotation_max_error = 45.0;
   double imu_rotation_histogram_bucket = 10.0;
   bool imu_rotation_filter_outliers = true;
+  bool close_time_adaptive_filtering = true;
   std::string excluded_pairs_file;
 
 
@@ -452,6 +453,7 @@ int main(int argc, char **argv)
   cmd.add( make_option('U', imu_rotation_max_error, "imu_rotation_max_error") );
   cmd.add( make_option('H', imu_rotation_histogram_bucket, "imu_rotation_histogram_bucket") );
   cmd.add( make_option('q', imu_rotation_filter_outliers, "imu_rotation_filter_outliers") );
+  cmd.add( make_option('J', close_time_adaptive_filtering, "close_time_adaptive_filtering") );
   cmd.add( make_option('E', excluded_pairs_file, "excluded_pairs_file") );
   // Stellar SfM
   std::string graph_simplification = "MST_X";
@@ -558,6 +560,8 @@ int main(int argc, char **argv)
       << "\t[-H|--imu_rotation_histogram_bucket] Histogram bucket size in degrees (default: " << imu_rotation_histogram_bucket << ")\n"
       << "\t[-q|--imu_rotation_filter_outliers] Remove IMU priors above max error and rerun rotation averaging "
       << "(default: " << (imu_rotation_filter_outliers ? "true" : "false") << ", set to 0 to disable)\n"
+      << "\t[-J|--close_time_adaptive_filtering] Enable close-time adaptive filters in global SfM "
+      << "(default: " << (close_time_adaptive_filtering ? "true" : "false") << ", set to 0 to disable)\n"
       << "\t[-E|--excluded_pairs_file] JSON file with excluded image pairs (excluded_pairs: [[id1,id2],...])\n"
       << "[STELLAR]\n"
       << "\t[-G|--graph_simplification]\n"
@@ -908,6 +912,7 @@ int main(int argc, char **argv)
       imu_rotation_filter_outliers,
       imu_rotation_max_error,
       imu_rotation_histogram_bucket);
+    engine->SetCloseTimeAdaptiveFiltering(close_time_adaptive_filtering);
 
     sfm_engine.reset(engine);
   }

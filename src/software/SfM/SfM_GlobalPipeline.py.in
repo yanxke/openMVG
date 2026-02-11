@@ -42,6 +42,8 @@ parser.add_argument("--imu_rotation_filter_outliers", dest="imu_rotation_filter_
                     help="Filter IMU priors with large errors (default).")
 parser.add_argument("--no_imu_rotation_filter_outliers", dest="imu_rotation_filter_outliers", action="store_false",
                     help="Disable IMU prior outlier filtering.")
+parser.add_argument("--disable_close_time_adaptive_filtering", action="store_true",
+                    help="Disable close-time adaptive filtering in global SfM (enabled by default).")
 parser.add_argument("-gp", "--geofilt_prec", type=float, default=0.0, help="Geometric filter precision (max pixel error). Use 0.0 for Auto (found by RANSAC math).")
 parser.add_argument("-mi", "--min_inliers", type=int, default=50, help="Minimum inlier count per pair.")
 parser.add_argument("-ri", "--ransac_iter", type=int, default=512, help="RANSAC iterations for geometric filter.")
@@ -221,7 +223,8 @@ with open(log_path, "a") as log_file:
              "--imu_rotation_weight", str(args.imu_rotation_weight),
              "--imu_rotation_max_error", str(args.imu_rotation_max_error),
              "--imu_rotation_histogram_bucket", str(args.imu_rotation_histogram_bucket),
-             "--imu_rotation_filter_outliers", "1" if args.imu_rotation_filter_outliers else "0"]
+             "--imu_rotation_filter_outliers", "1" if args.imu_rotation_filter_outliers else "0",
+             "--close_time_adaptive_filtering", "0" if args.disable_close_time_adaptive_filtering else "1"]
   if excluded_pairs_file:
     sfm_cmd.extend(["--excluded_pairs_file", excluded_pairs_file])
 
