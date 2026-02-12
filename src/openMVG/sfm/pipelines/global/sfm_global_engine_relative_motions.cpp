@@ -359,7 +359,8 @@ void WritePosesCsv(const std::string & path, const openMVG::sfm::SfM_Data & sfm_
 
 void WriteRelativeRotationsCsv(const std::string & path,
                                const openMVG::sfm::SfM_Data & sfm_data,
-                               const openMVG::rotation_averaging::RelativeRotations & relatives_R)
+                               const openMVG::rotation_averaging::RelativeRotations & relatives_R,
+                               const openMVG::Hash_Map<openMVG::IndexT, openMVG::Mat3> * transformed_imu_pose_rotations = nullptr)
 {
   OPENMVG_LOG_INFO << "Writing CSV: " << path;
   std::ofstream csv(path.c_str());
@@ -378,6 +379,17 @@ void WriteRelativeRotationsCsv(const std::string & path,
     if (!view_priors || !view_priors->b_has_imu_rotation_)
       continue;
 
+    // Prefer transformed IMU rotations (same convention used by global SfM),
+    // and only fallback to raw view priors when transformed rotations are unavailable.
+    if (transformed_imu_pose_rotations)
+    {
+      const auto transformed_it = transformed_imu_pose_rotations->find(view->id_pose);
+      if (transformed_it != transformed_imu_pose_rotations->end())
+      {
+        imu_pose_rotations[view->id_pose] = transformed_it->second;
+        continue;
+      }
+    }
     imu_pose_rotations[view->id_pose] = view_priors->imu_rotation_;
   }
 
@@ -732,7 +744,7 @@ bool GlobalSfMReconstructionEngine_RelativeMotions::Compute_Global_Rotations
   {
     const std::string csv_path =
       stlplus::create_filespec(sOut_directory_, "relative_rotations_before_rotation_averaging", "csv");
-    WriteRelativeRotationsCsv(csv_path, sfm_data_, relatives_R);
+    WriteRelativeRotationsCsv(csv_path, sfm_data_, relatives_R, &imu_pose_rotations_);
   }
   // Log statistics about the relative rotation graph
   {
