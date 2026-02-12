@@ -59,14 +59,13 @@ constexpr size_t kCloseTimeRelaxedMinTripletTrackCount = 10;
 constexpr double kLegacyInlierSupportRatio = 0.33;
 constexpr double kCloseTimeInlierSupportRatio = 0.2;
 
-// Keep legacy acceptance behavior exactly as before.
-// NOTE: This is intentionally bug-compatible with the historical expression:
+// NOTE: Historical expression had a bug::
 //   (vec_inliers.size() > 30 && 0.33 * tracks.size())
 // where the second term is used as a truthy value.
 bool PassLegacyTripletAcceptance(const size_t inlier_count, const size_t track_count)
 {
   return (inlier_count > kLegacyMinTripletTrackCount &&
-          (kLegacyInlierSupportRatio * static_cast<double>(track_count)));
+    inlier_count >= static_cast<size_t>(kLegacyInlierSupportRatio * static_cast<double>(track_count)));
 }
 
 bool PassCloseTimeRelaxedAcceptance(
