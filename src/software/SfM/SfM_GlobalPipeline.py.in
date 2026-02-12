@@ -39,9 +39,7 @@ parser.add_argument("--imu_rotation_weight", type=float, default=0.0, help="IMU 
 parser.add_argument("--imu_rotation_max_error", type=float, default=45.0, help="Max error (deg) for IMU prior filtering.")
 parser.add_argument("--imu_rotation_histogram_bucket", type=float, default=10.0, help="IMU error histogram bucket size (deg).")
 parser.add_argument("--imu_rotation_filter_outliers", dest="imu_rotation_filter_outliers", action="store_true",
-                    help="Filter IMU priors with large errors (default).")
-parser.add_argument("--no_imu_rotation_filter_outliers", dest="imu_rotation_filter_outliers", action="store_false",
-                    help="Disable IMU prior outlier filtering.")
+                    help="Enable IMU-based rotation outlier filtering in global SfM (off by default).")
 parser.add_argument("--enable_close_time_adaptive_filtering", dest="close_time_adaptive_filtering", action="store_true",
                     help="Enable close-time adaptive filtering in global SfM (disabled by default).")
 parser.add_argument("-gp", "--geofilt_prec", type=float, default=0.0, help="Geometric filter precision (max pixel error). Use 0.0 for Auto (found by RANSAC math).")
@@ -170,7 +168,7 @@ with open(log_path, "a") as log_file:
               "-g", "i",     # IMU-guided 2-point solver
               "-o", matches_dir+"/matches.e.bin",
               "-I", str(args.ransac_iter),    # Iterations
-              "-t", "40.0",   # RANSAC search limit (fixed bound)
+              "-t", "30.0",   # RANSAC search limit (fixed bound)
               "-M", str(args.min_inliers),    # Min inlier count per pair
               "-T", str(args.geofilt_prec), # User-defined filter precision (0.0=Auto)
               # "-c", "1000"   # Optional: Regions cache size (1000 images)
@@ -222,7 +220,8 @@ with open(log_path, "a") as log_file:
              "--imu_rotation_weight", str(args.imu_rotation_weight),
              "--imu_rotation_max_error", str(args.imu_rotation_max_error),
              "--imu_rotation_histogram_bucket", str(args.imu_rotation_histogram_bucket),
-             "--imu_rotation_filter_outliers", "1" if args.imu_rotation_filter_outliers else "0",
+            #  "--imu_rotation_filter_outliers", "1" if args.imu_rotation_filter_outliers else "0",
+             "--imu_rotation_filter_outliers", "1",
              "--close_time_adaptive_filtering", "1" if args.close_time_adaptive_filtering else "0"]
   if excluded_pairs_file:
     sfm_cmd.extend(["--excluded_pairs_file", excluded_pairs_file])

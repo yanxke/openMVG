@@ -6,7 +6,6 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-#include "openMVG/exif/exif_IO_EasyExif.hpp"
 #include "openMVG/features/akaze/image_describer_akaze.hpp"
 #include "openMVG/features/descriptor.hpp"
 #include "openMVG/features/feature.hpp"
@@ -51,40 +50,6 @@ using namespace openMVG::sfm;
 using namespace openMVG::matching_image_collection;
 
 namespace {
-
-bool ParseImuRotationFromUserComment(const std::string & comment, openMVG::Mat3 & rotation_dw)
-{
-  const std::string key = "Rotation:";
-  const std::size_t pos = comment.find(key);
-  if (pos == std::string::npos)
-    return false;
-
-  std::string rot_part = comment.substr(pos + key.size());
-  for (char & c : rot_part)
-  {
-    if (c == '\n' || c == '\r')
-      c = ' ';
-  }
-
-  std::vector<double> vals;
-  vals.reserve(9);
-  std::string token;
-  std::stringstream ss(rot_part);
-  while (std::getline(ss, token, ','))
-  {
-    std::stringstream t(token);
-    double v = 0.0;
-    if (t >> v)
-      vals.push_back(v);
-  }
-  if (vals.size() < 9)
-    return false;
-
-  rotation_dw << vals[0], vals[1], vals[2],
-                  vals[3], vals[4], vals[5],
-                  vals[6], vals[7], vals[8];
-  return true;
-}
 
 openMVG::Mat3 DeviceToCameraRotation()
 {
@@ -354,28 +319,27 @@ int main( int argc, char** argv )
   }
 
   //---------------------------------------
-  // Cache EXIF headings for motion priors
+  // Cache heading and IMU priors from sfm_data ViewPriors
   //---------------------------------------
-  //---------------------------------------
-  // Cache EXIF data for motion priors
   //---------------------------------------
   std::map<IndexT, double> map_headings;
   std::map<IndexT, Mat3> map_imu_rotations;
 
   if (eGeometricModelToCompute == ESSENTIAL_MATRIX)
   {
-    OPENMVG_LOG_INFO << "Caching GPS headings for motion priors...";
+    OPENMVG_LOG_INFO << "Caching GPS headings from ViewPriors...";
     for (const auto & view_ptr : sfm_data.GetViews())
     {
-      const std::string image_path = stlplus::folder_append_separator(sfm_data.s_root_path) + view_ptr.second->s_Img_path;
-      std::unique_ptr<openMVG::exif::Exif_IO> exifIO(new openMVG::exif::Exif_IO_EasyExif(image_path));
-      double heading;
-      if (exifIO->GPSImageDirection(&heading))
+      const ViewPriors * view_priors = dynamic_cast<const ViewPriors *>(view_ptr.second.get());
+      if (view_priors && view_priors->b_has_heading_)
       {
-        map_headings[view_ptr.first] = heading;
+        map_headings[view_ptr.first] = view_priors->gps_heading_;
       }
     }
-    OPENMVG_LOG_INFO << "Loaded GPS headings for " << map_headings.size() << " / " << sfm_data.GetViews().size() << " images.";
+    OPENMVG_LOG_INFO << "Loaded GPS headings for "
+                     << map_headings.size() << " / "
+                     << sfm_data.GetViews().size()
+                     << " images from ViewPriors.";
 
     // Print histogram of headings (36 buckets of 10 degrees each)
     if (!map_headings.empty())
