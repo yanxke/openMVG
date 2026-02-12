@@ -127,7 +127,8 @@ struct GeometricFilter_EMatrix_AC_Imu
     const std::map<IndexT, Mat3> * imu_rotations = nullptr,
     size_t total_expected = 0,
     size_t min_inliers = 0,
-    double dRecovery_precision = 4.0
+    double dRecovery_precision = 4.0,
+    bool reestimate_rotation_acransac = false
   ):
     m_dPrecision(dPrecision),
     m_stIteration(iteration),
@@ -136,6 +137,7 @@ struct GeometricFilter_EMatrix_AC_Imu
     m_imu_rotations(imu_rotations),
     m_min_inliers(min_inliers),
     m_dRecovery_precision(dRecovery_precision),
+    m_reestimate_rotation_acransac(reestimate_rotation_acransac),
     m_stats(std::make_shared<GeometricFilterStats>())
   {
     m_stats->total_expected = total_expected;
@@ -225,7 +227,7 @@ struct GeometricFilter_EMatrix_AC_Imu
                       xJ, bearing_J, view_J->ui_width, view_J->ui_height,
                       ptrPinhole_I->K(), ptrPinhole_J->K(), R1_wc, R2_wc);
 
-    //-- 3. Robust estimation (Single pass)
+    //-- 3. Robust estimation (single pass with fixed IMU rotation)
     const double upper_bound_precision = Square(m_dPrecision); // Default 32px
     std::vector<uint32_t> ransac_inliers;
     m_stats->ransac_attempted++;
@@ -239,6 +241,55 @@ struct GeometricFilter_EMatrix_AC_Imu
     }
 
     m_dPrecision_robust = ACRansacOut.first; // This is the "Auto" precision (squared)
+
+    //-- 3b. Optional re-estimation of full Essential matrix (R and t) with ACRANSAC
+    // Uses Stage-3 inliers as candidates and re-runs ACRANSAC with a 5-point solver.
+    if (m_reestimate_rotation_acransac)
+    {
+      using FullKernelType =
+        openMVG::robust::ACKernelAdaptorEssential<
+          openMVG::essential::kernel::FivePointSolver,
+          openMVG::fundamental::kernel::EpipolarDistanceError,
+          Mat3>;
+
+      if (ransac_inliers.size() < FullKernelType::MINIMUM_SAMPLES)
+      {
+        return false;
+      }
+
+      const Mat2X xI_candidates = ExtractColumns(xI, ransac_inliers);
+      const Mat2X xJ_candidates = ExtractColumns(xJ, ransac_inliers);
+      const Mat3X bearing_I_candidates = ExtractColumns(bearing_I, ransac_inliers);
+      const Mat3X bearing_J_candidates = ExtractColumns(bearing_J, ransac_inliers);
+
+      FullKernelType full_kernel(
+        xI_candidates, bearing_I_candidates, view_I->ui_width, view_I->ui_height,
+        xJ_candidates, bearing_J_candidates, view_J->ui_width, view_J->ui_height,
+        ptrPinhole_I->K(), ptrPinhole_J->K());
+
+      std::vector<uint32_t> refined_local_inliers;
+      const auto refinedAcransacOut =
+        openMVG::robust::ACRANSAC(
+          full_kernel,
+          refined_local_inliers,
+          m_stIteration,
+          &m_E,
+          upper_bound_precision);
+
+      if (refined_local_inliers.size() < std::max<size_t>(m_min_inliers, (size_t)(FullKernelType::MINIMUM_SAMPLES * 2.5)))
+      {
+        return false;
+      }
+
+      std::vector<uint32_t> refined_global_inliers;
+      refined_global_inliers.reserve(refined_local_inliers.size());
+      for (const uint32_t local_idx : refined_local_inliers)
+      {
+        refined_global_inliers.push_back(ransac_inliers[local_idx]);
+      }
+      ransac_inliers.swap(refined_global_inliers);
+      m_dPrecision_robust = refinedAcransacOut.first;
+    }
 
     //-- 4. Final selection (Recovery filtering)
     //  - m_dRecovery_precision > 0: use fixed pixel threshold (user provided).
@@ -353,6 +404,7 @@ struct GeometricFilter_EMatrix_AC_Imu
   const std::map<IndexT, Mat3> * m_imu_rotations;
   size_t m_min_inliers;
   double m_dRecovery_precision;
+  bool m_reestimate_rotation_acransac;
   std::shared_ptr<GeometricFilterStats> m_stats;
 };
 

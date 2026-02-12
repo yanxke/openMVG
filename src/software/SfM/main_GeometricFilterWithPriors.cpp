@@ -125,6 +125,7 @@ int main( int argc, char** argv )
   int    min_inliers = 0;       // min inlier count per pair
   double dPrecision = 32.0;     // max pixel error (Stage 1 RANSAC)
   double dRecoveryPrecision = 4.0; // max pixel error (Stage 3 Recovery)
+  bool bImuReestimateRotation = false; // Re-estimate full E (R+t) in ACRANSAC.
 
   //required
   cmd.add( make_option( 'i', sSfM_Data_Filename, "input_file" ) );
@@ -149,6 +150,7 @@ int main( int argc, char** argv )
   cmd.add( make_option( 'M', min_inliers, "min_inliers" ) );
   cmd.add( make_option( 't', dPrecision, "precision" ) );
   cmd.add( make_option( 'T', dRecoveryPrecision, "recovery_precision" ) );
+  cmd.add( make_switch( 'U', "imu_reestimate_rotation" ) );
 
   try
   {
@@ -190,11 +192,15 @@ int main( int argc, char** argv )
                      << "[-M|--min_inliers]      Min inlier count to keep a pair (default: 0)\n"
                      << "[-t|--precision]        Max pixel error for RANSAC (default: 4.0)\n"
                      << "[-T|--recovery_precision] Recovery threshold in pixels:\n"
-                     << "                         >0 fixed threshold, 0 auto (ACRANSAC precision), <0 disable recovery filter.\n";
+                     << "                         >0 fixed threshold, 0 auto (ACRANSAC precision), <0 disable recovery filter.\n"
+                     << "[-U|--imu_reestimate_rotation] (IMU mode) Re-estimate full essential matrix\n"
+                     << "                         (rotation + translation) during ACRANSAC.\n";
 
     OPENMVG_LOG_INFO << s;
     return EXIT_FAILURE;
   }
+
+  bImuReestimateRotation = cmd.used('U');
 
   OPENMVG_LOG_INFO << " You called : "
                    << "\n"
@@ -210,18 +216,10 @@ int main( int argc, char** argv )
                    << "--geometric_model    " << sGeometricModel << "\n"
                    << "--guided_matching    " << bGuided_matching << "\n"
                    << "--cache_size         " << ((ui_max_cache_size == 0) ? "unlimited" : std::to_string(ui_max_cache_size)) << "\n"
-                   << "Motion priors:       "
-                   << "\n"
-                   << "--yaw_tol            " << yaw_tol << "\n"
-                   << "--pitch_tol          " << pitch_tol << "\n"
-                   << "--roll_tol           " << roll_tol << "\n"
-                    << "--alt_tol            " << alt_tol << "\n"
-                    << "--prior_weight       " << prior_weight << "\n"
-                    << "--heading_max        " << heading_max << "\n"
-                    << "--spot_sample_size   " << spot_sample_size << "\n"
                     << "--min_inliers        " << min_inliers << "\n"
                     << "--precision          " << dPrecision << "\n"
-                    << "--recovery_precision " << dRecoveryPrecision;
+                    << "--recovery_precision " << dRecoveryPrecision << "\n"
+                    << "--imu_reestimate_rotation " << (bImuReestimateRotation ? "true" : "false");
 
   if ( sFilteredMatchesFilename.empty() )
   {
@@ -277,6 +275,18 @@ int main( int argc, char** argv )
       return EXIT_FAILURE;
   }
 
+  if (eGeometricModelToCompute == ESSENTIAL_MATRIX)
+  {
+    OPENMVG_LOG_INFO << "Motion priors (active with -g e):\n"
+                     << "--yaw_tol            " << yaw_tol << "\n"
+                     << "--pitch_tol          " << pitch_tol << "\n"
+                     << "--roll_tol           " << roll_tol << "\n"
+                     << "--alt_tol            " << alt_tol << "\n"
+                     << "--prior_weight       " << prior_weight << "\n"
+                     << "--heading_max        " << heading_max << "\n"
+                     << "--spot_sample_size   " << spot_sample_size;
+  }
+
   // Set default iterations for IMU if not specified by user
   if (eGeometricModelToCompute == ESSENTIAL_MATRIX_IMU && !cmd.used('I'))
   {
@@ -298,6 +308,8 @@ int main( int argc, char** argv )
       OPENMVG_LOG_INFO << "IMU recovery mode: fixed threshold (-T "
                        << dRecoveryPrecision << " px).";
     }
+    OPENMVG_LOG_INFO << "IMU rotation re-estimation: "
+                     << (bImuReestimateRotation ? "enabled (-U)" : "disabled");
   }
 
   // -----------------------------
@@ -524,7 +536,7 @@ int main( int argc, char** argv )
       case ESSENTIAL_MATRIX_IMU:
       {
         filter_ptr->Robust_model_estimation(
-            GeometricFilter_EMatrix_AC_Imu( dPrecision, imax_iteration, &map_imu_rotations, map_PutativeMatches.size(), (size_t)min_inliers, dRecoveryPrecision ),
+            GeometricFilter_EMatrix_AC_Imu( dPrecision, imax_iteration, &map_imu_rotations, map_PutativeMatches.size(), (size_t)min_inliers, dRecoveryPrecision, bImuReestimateRotation ),
             map_PutativeMatches,
             bGuided_matching,
             d_distance_ratio,
@@ -608,6 +620,7 @@ int main( int argc, char** argv )
       {
         OPENMVG_LOG_INFO << "  Recovery filter:      fixed " << dRecoveryPrecision << " px";
       }
+      OPENMVG_LOG_INFO << "  Rotation re-estimate: " << (bImuReestimateRotation ? "enabled" : "disabled");
       if (map_GeometricMatches.empty() && !map_PutativeMatches.empty())
       {
         OPENMVG_LOG_WARNING << "\n*** WARNING: All pairs were filtered out! ***";

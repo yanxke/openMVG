@@ -64,6 +64,13 @@ struct GeometricFilterStats {
     std::atomic<size_t> putative_matches_total{0};
     std::atomic<size_t> stage1_matches_total{0};
     std::atomic<size_t> successful_pairs_count{0};
+    // IMU rotation re-estimation (-U) diagnostics
+    std::atomic<size_t> reestimate_pairs_attempted{0};
+    std::atomic<size_t> reestimate_pairs_reduced{0};
+    std::atomic<size_t> reestimate_pairs_rejected{0};
+    std::atomic<size_t> reestimate_inliers_before_total{0};
+    std::atomic<size_t> reestimate_inliers_after_total{0};
+    std::atomic<size_t> reestimate_inliers_rejected_total{0};
 
     size_t total_expected{0};
     double heading_threshold = 0.0;
@@ -116,6 +123,25 @@ struct GeometricFilterStats {
                 OPENMVG_LOG_INFO << "  Total RANSAC Inliers: " << r_inl;
                 OPENMVG_LOG_INFO << "  Total FINAL Matches:  " << f_tot;
             }
+        size_t reest_attempted = reestimate_pairs_attempted.load();
+        if (reest_attempted > 0) {
+            const size_t reest_reduced = reestimate_pairs_reduced.load();
+            const size_t reest_rejected_pairs = reestimate_pairs_rejected.load();
+            const size_t reest_before = reestimate_inliers_before_total.load();
+            const size_t reest_after = reestimate_inliers_after_total.load();
+            const size_t reest_rejected = reestimate_inliers_rejected_total.load();
+
+            OPENMVG_LOG_INFO << "IMU rotation re-estimation stats (-U):";
+            OPENMVG_LOG_INFO << "  Pairs attempted:           " << reest_attempted;
+            OPENMVG_LOG_INFO << "  Pairs with fewer inliers:  " << reest_reduced
+                             << " (" << (reest_attempted > 0 ? (reest_reduced * 100.0 / reest_attempted) : 0.0) << "%)";
+            OPENMVG_LOG_INFO << "  Pairs rejected at re-est.: " << reest_rejected_pairs
+                             << " (" << (reest_attempted > 0 ? (reest_rejected_pairs * 100.0 / reest_attempted) : 0.0) << "%)";
+            OPENMVG_LOG_INFO << "  Inliers before re-est.:    " << reest_before;
+            OPENMVG_LOG_INFO << "  Inliers after re-est.:     " << reest_after;
+            OPENMVG_LOG_INFO << "  Inliers further rejected:  " << reest_rejected
+                             << " (" << (reest_before > 0 ? (reest_rejected * 100.0 / reest_before) : 0.0) << "%)";
+        }
         OPENMVG_LOG_INFO << "------------------------------------------\n";
     }
 
