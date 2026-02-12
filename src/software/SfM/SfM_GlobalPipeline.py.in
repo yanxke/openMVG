@@ -170,7 +170,7 @@ with open(log_path, "a") as log_file:
               "-g", "i",     # IMU-guided 2-point solver
               "-o", matches_dir+"/matches.e.bin",
               "-I", str(args.ransac_iter),    # Iterations
-              "-t", "50.0",   # RANSAC search limit (fixed bound)
+              "-t", "40.0",   # RANSAC search limit (fixed bound)
               "-M", str(args.min_inliers),    # Min inlier count per pair
               "-T", str(args.geofilt_prec), # User-defined filter precision (0.0=Auto)
               # "-c", "1000"   # Optional: Regions cache size (1000 images)
