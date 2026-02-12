@@ -240,11 +240,17 @@ struct GeometricFilter_EMatrix_AC_Imu
 
     m_dPrecision_robust = ACRansacOut.first; // This is the "Auto" precision (squared)
 
-    //-- 4. Final selection (Apply tighter Recovery precision if requested)
+    //-- 4. Final selection (Recovery filtering)
+    //  - m_dRecovery_precision > 0: use fixed pixel threshold (user provided).
+    //  - m_dRecovery_precision == 0: use ACRANSAC auto precision (same spirit as -g e).
+    //  - m_dRecovery_precision < 0: disable recovery filtering.
     std::vector<uint32_t> final_inlier_indices;
-    if (m_dRecovery_precision > 0.0)
+    if (m_dRecovery_precision >= 0.0)
     {
-      const double recovery_threshold_sq = Square(m_dRecovery_precision);
+      const double recovery_threshold_sq =
+        (m_dRecovery_precision > 0.0)
+          ? Square(m_dRecovery_precision)
+          : m_dPrecision_robust;
       Mat3 F;
       FundamentalFromEssential(m_E, ptrPinhole_I->K(), ptrPinhole_J->K(), &F);
 
@@ -264,7 +270,7 @@ struct GeometricFilter_EMatrix_AC_Imu
     }
     else
     {
-      // "Auto" mode: use RANSAC inliers directly
+      // Recovery filtering disabled: keep RANSAC inliers directly.
       final_inlier_indices = std::move(ransac_inliers);
     }
 

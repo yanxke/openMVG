@@ -224,7 +224,8 @@ int main( int argc, char** argv )
                      << "[-S|--spot_sample_size] Number of points to spot-check (default: 15, 0 to disable)\n"
                      << "[-M|--min_inliers]      Min inlier count to keep a pair (default: 0)\n"
                      << "[-t|--precision]        Max pixel error for RANSAC (default: 4.0)\n"
-                     << "[-T|--recovery_precision] Max pixel error for recovery stage (default: 0.0 for Auto)";
+                     << "[-T|--recovery_precision] Recovery threshold in pixels:\n"
+                     << "                         >0 fixed threshold, 0 auto (ACRANSAC precision), <0 disable recovery filter.\n";
 
     OPENMVG_LOG_INFO << s;
     return EXIT_FAILURE;
@@ -315,6 +316,23 @@ int main( int argc, char** argv )
   if (eGeometricModelToCompute == ESSENTIAL_MATRIX_IMU && !cmd.used('I'))
   {
     imax_iteration = 64;
+  }
+
+  if (eGeometricModelToCompute == ESSENTIAL_MATRIX_IMU)
+  {
+    if (dRecoveryPrecision < 0.0)
+    {
+      OPENMVG_LOG_INFO << "IMU recovery mode: disabled (-T < 0).";
+    }
+    else if (dRecoveryPrecision == 0.0)
+    {
+      OPENMVG_LOG_INFO << "IMU recovery mode: auto (-T 0, use ACRANSAC precision).";
+    }
+    else
+    {
+      OPENMVG_LOG_INFO << "IMU recovery mode: fixed threshold (-T "
+                       << dRecoveryPrecision << " px).";
+    }
   }
 
   // -----------------------------
@@ -614,6 +632,18 @@ int main( int argc, char** argv )
     {
       OPENMVG_LOG_INFO << "\nIMU Configuration:";
       OPENMVG_LOG_INFO << "  IMU rotations loaded: " << map_imu_rotations.size() << " / " << sfm_data.GetViews().size();
+      if (dRecoveryPrecision < 0.0)
+      {
+        OPENMVG_LOG_INFO << "  Recovery filter:      disabled";
+      }
+      else if (dRecoveryPrecision == 0.0)
+      {
+        OPENMVG_LOG_INFO << "  Recovery filter:      auto (ACRANSAC precision)";
+      }
+      else
+      {
+        OPENMVG_LOG_INFO << "  Recovery filter:      fixed " << dRecoveryPrecision << " px";
+      }
       if (map_GeometricMatches.empty() && !map_PutativeMatches.empty())
       {
         OPENMVG_LOG_WARNING << "\n*** WARNING: All pairs were filtered out! ***";
