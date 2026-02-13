@@ -42,6 +42,10 @@ parser.add_argument("--imu_rotation_filter_outliers", dest="imu_rotation_filter_
                     help="Enable IMU-based rotation outlier filtering in global SfM (off by default).")
 parser.add_argument("--imu_reestimate_rotation", action="store_true",
                     help="In IMU geometric filtering, re-estimate full essential matrix (rotation + translation) during ACRANSAC.")
+parser.add_argument("--imu_reestimate_prec", type=float, default=None,
+                    help="Optional pixel threshold for IMU re-estimation pass (-Q). If unset, uses first-pass precision.")
+parser.add_argument("--imu_pitch_roll_only", action="store_true",
+                    help="Use IMU pitch/roll only (ignore compass yaw) during IMU geometric filtering.")
 parser.add_argument("--enable_close_time_adaptive_filtering", dest="close_time_adaptive_filtering", action="store_true",
                     help="Enable close-time adaptive filtering in global SfM (disabled by default).")
 parser.add_argument("-gp", "--geofilt_prec", type=float, default=0.0, help="Geometric filter precision (max pixel error). Use 0.0 for Auto (found by RANSAC math).")
@@ -145,6 +149,10 @@ with open(log_path, "a") as log_file:
            log_file)
 
   if args.use_plain_geometric_filter:
+    mode_msg = "Geometric filter mode: e (plain essential, no priors)\n"
+    print(mode_msg.strip())
+    log_file.write(mode_msg)
+    log_file.flush()
     # 5. Filter matches with original geometric filter (no priors).
     run_step("5. Filter matches with geometric filter (-g e, no priors)",
              [os.path.join(OPENMVG_SFM_BIN, "openMVG_main_GeometricFilter"),
@@ -163,10 +171,16 @@ with open(log_path, "a") as log_file:
     #   - Reduce RANSAC from 5-point to 2-point (known R, solve for t only)
     #   - Run only 64 RANSAC iterations instead of 1024+ (much faster!)
     # Result: ~4x speedup vs GPS heading method, more accurate filtering
+    imu_model = "p" if args.imu_pitch_roll_only else "i"
+    imu_mode_name = "p (IMU pitch/roll only)" if imu_model == "p" else "i (IMU full rotation)"
+    mode_msg = "Geometric filter mode: {}\n".format(imu_mode_name)
+    print(mode_msg.strip())
+    log_file.write(mode_msg)
+    log_file.flush()
     geofilt_cmd = [os.path.join(OPENMVG_SFM_BIN, "openMVG_main_GeometricFilterWithPriors"),
                    "-i", matches_dir+"/sfm_data.json",
                    "-m", matches_dir+"/matches.putative.bin",
-                   "-g", "i",     # IMU-guided 2-point solver
+                   "-g", imu_model,     # IMU-guided solver (full R or pitch/roll-only)
                    "-o", matches_dir+"/matches.e.bin",
                    "-I", str(args.ransac_iter),    # Iterations
                    "-t", "50.0",   # RANSAC search limit (fixed bound)
@@ -174,8 +188,10 @@ with open(log_path, "a") as log_file:
                    "-T", str(args.geofilt_prec), # User-defined filter precision (0.0=Auto)
                    # "-c", "1000"   # Optional: Regions cache size (1000 images)
                    ]
-    # if args.imu_reestimate_rotation:
-    geofilt_cmd.append("-U")
+    if args.imu_reestimate_rotation:
+      geofilt_cmd.append("-U")
+    if args.imu_reestimate_prec is not None:
+      geofilt_cmd.extend(["-Q", str(args.imu_reestimate_prec)])
     run_step("5. Filter matches with IMU-guided solver", geofilt_cmd, log_file)
 
   # 5b. Optional: Additional post-filtering by priors (now mostly redundant since priors are in step 5)
