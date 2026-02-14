@@ -40,17 +40,17 @@ parser.add_argument("--imu_rotation_max_error", type=float, default=45.0, help="
 parser.add_argument("--imu_rotation_histogram_bucket", type=float, default=10.0, help="IMU error histogram bucket size (deg).")
 parser.add_argument("--imu_rotation_filter_outliers", dest="imu_rotation_filter_outliers", action="store_true",
                     help="Enable IMU-based rotation outlier filtering in global SfM (off by default).")
-parser.add_argument("--imu_reestimate_rotation", action="store_true",
-                    help="In IMU geometric filtering, re-estimate full essential matrix (rotation + translation) during ACRANSAC.")
-parser.add_argument("--imu_reestimate_prec", type=float, default=None,
-                    help="Optional pixel threshold for IMU re-estimation pass (-Q). If unset, uses first-pass precision.")
+parser.add_argument("--disable_reestimate_rotation", action="store_true",
+                    help="Disable IMU geometric-filter rotation re-estimation pass.")
+parser.add_argument("--imu_reestimate_prec", type=float, default=15.0,
+                    help="Pixel threshold for IMU re-estimation pass (-Q).")
 parser.add_argument("--imu_pitch_roll_only", action="store_true",
                     help="Use IMU pitch/roll only (ignore compass yaw) during IMU geometric filtering.")
 parser.add_argument("--enable_close_time_adaptive_filtering", dest="close_time_adaptive_filtering", action="store_true",
                     help="Enable close-time adaptive filtering in global SfM (disabled by default).")
 parser.add_argument("-gp", "--geofilt_prec", type=float, default=0.0, help="Geometric filter precision (max pixel error). Use 0.0 for Auto (found by RANSAC math).")
 parser.add_argument("-mi", "--min_inliers", type=int, default=50, help="Minimum inlier count per pair.")
-parser.add_argument("-ri", "--ransac_iter", type=int, default=512, help="RANSAC iterations for geometric filter.")
+parser.add_argument("-ri", "--ransac_iter", type=int, default=1024, help="RANSAC iterations for geometric filter.")
 parser.add_argument("--use_plain_geometric_filter", action="store_true",
                     help="Use openMVG_main_GeometricFilter with -g e (no priors), instead of openMVG_main_GeometricFilterWithPriors -g i.")
 parser.add_argument("--excluded_pairs_file", type=str, default="",
@@ -188,7 +188,7 @@ with open(log_path, "a") as log_file:
                    "-T", str(args.geofilt_prec), # User-defined filter precision (0.0=Auto)
                    # "-c", "1000"   # Optional: Regions cache size (1000 images)
                    ]
-    if args.imu_reestimate_rotation:
+    if not args.disable_reestimate_rotation:
       geofilt_cmd.append("-U")
     if args.imu_reestimate_prec is not None:
       geofilt_cmd.extend(["-Q", str(args.imu_reestimate_prec)])
