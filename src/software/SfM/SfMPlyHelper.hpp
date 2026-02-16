@@ -11,6 +11,8 @@
 
 #include "openMVG/numeric/numeric.h"
 
+#include <algorithm>
+#include <cmath>
 #include <fstream>
 #include <iomanip>
 #include <string>
@@ -18,6 +20,70 @@
 
 namespace openMVG{
 namespace plyHelper{
+
+inline std::vector<unsigned char> ComputeKeepMaskByMedianDistance(const std::vector<Vec3> & vec_points)
+{
+  const size_t point_count = vec_points.size();
+  std::vector<unsigned char> keep_mask(point_count, 1);
+  const size_t remove_count = static_cast<size_t>(std::floor(point_count * 0.01));
+  if (point_count == 0 || remove_count == 0)
+  {
+    return keep_mask;
+  }
+
+  std::vector<double> xs;
+  std::vector<double> ys;
+  std::vector<double> zs;
+  xs.reserve(point_count);
+  ys.reserve(point_count);
+  zs.reserve(point_count);
+  for (const Vec3 & p : vec_points)
+  {
+    xs.push_back(p(0));
+    ys.push_back(p(1));
+    zs.push_back(p(2));
+  }
+
+  const auto median_of = [](std::vector<double> & v) -> double
+  {
+    const size_t n = v.size();
+    const size_t mid = n / 2;
+    std::nth_element(v.begin(), v.begin() + mid, v.end());
+    if (n % 2 == 1)
+    {
+      return v[mid];
+    }
+    const double high = v[mid];
+    std::nth_element(v.begin(), v.begin() + (mid - 1), v.begin() + mid);
+    return 0.5 * (v[mid - 1] + high);
+  };
+
+  const Vec3 median_center(
+    median_of(xs),
+    median_of(ys),
+    median_of(zs));
+
+  std::vector<double> dist_sq;
+  dist_sq.reserve(point_count);
+  for (const Vec3 & p : vec_points)
+  {
+    dist_sq.push_back((p - median_center).squaredNorm());
+  }
+
+  const size_t keep_count = point_count - remove_count;
+  std::vector<double> dist_sq_copy = dist_sq;
+  std::nth_element(
+    dist_sq_copy.begin(),
+    dist_sq_copy.begin() + (keep_count - 1),
+    dist_sq_copy.end());
+  const double keep_threshold = dist_sq_copy[keep_count - 1];
+
+  for (size_t i = 0; i < point_count; ++i)
+  {
+    keep_mask[i] = (dist_sq[i] <= keep_threshold) ? 1 : 0;
+  }
+  return keep_mask;
+}
 
 /// Export 3D point vector to PLY format
 inline
@@ -28,13 +94,20 @@ exportToPly
   const std::string & sFileName
 )
 {
+  const std::vector<unsigned char> keep_mask = ComputeKeepMaskByMedianDistance(vec_points);
+  size_t kept_count = 0;
+  for (unsigned char keep : keep_mask)
+  {
+    kept_count += keep;
+  }
+
   std::ofstream outfile(sFileName.c_str());
   if (!outfile)
     return false;
 
   outfile << "ply"
     << "\n" << "format ascii 1.0"
-    << "\n" << "element vertex " << vec_points.size()
+    << "\n" << "element vertex " << kept_count
     << "\n" << "property double x"
     << "\n" << "property double y"
     << "\n" << "property double z"
@@ -47,6 +120,8 @@ exportToPly
 
   for (size_t i=0; i < vec_points.size(); ++i)
   {
+    if (!keep_mask[i])
+      continue;
     outfile
       << vec_points[i](0) << ' '
       << vec_points[i](1) << ' '
@@ -67,13 +142,20 @@ inline bool exportToPly
   const std::vector<Vec3> * vec_coloredPoints = nullptr
 )
 {
+  const std::vector<unsigned char> keep_mask = ComputeKeepMaskByMedianDistance(vec_points);
+  size_t kept_count = 0;
+  for (unsigned char keep : keep_mask)
+  {
+    kept_count += keep;
+  }
+
   std::ofstream outfile(sFileName.c_str());
   if (!outfile)
     return false;
 
   outfile << "ply"
     << '\n' << "format ascii 1.0"
-    << '\n' << "element vertex " << vec_points.size()+vec_camPos.size()
+    << '\n' << "element vertex " << kept_count+vec_camPos.size()
     << '\n' << "property double x"
     << '\n' << "property double y"
     << '\n' << "property double z"
@@ -85,6 +167,8 @@ inline bool exportToPly
   outfile << std::fixed << std::setprecision (std::numeric_limits<double>::digits10 + 1);
 
   for (size_t i=0; i < vec_points.size(); ++i)  {
+    if (!keep_mask[i])
+      continue;
     if (vec_coloredPoints == nullptr)
       outfile
         << vec_points[i](0) << ' '

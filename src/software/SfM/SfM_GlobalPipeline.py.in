@@ -39,17 +39,22 @@ parser.add_argument("--imu_rotation_weight", type=float, default=0.0, help="IMU 
 parser.add_argument("--imu_rotation_max_error", type=float, default=45.0, help="Max error (deg) for IMU prior filtering.")
 parser.add_argument("--imu_rotation_histogram_bucket", type=float, default=10.0, help="IMU error histogram bucket size (deg).")
 parser.add_argument("--imu_rotation_filter_outliers", dest="imu_rotation_filter_outliers", action="store_true",
-                    help="Filter IMU priors with large errors (default).")
-parser.add_argument("--no_imu_rotation_filter_outliers", dest="imu_rotation_filter_outliers", action="store_false",
-                    help="Disable IMU prior outlier filtering.")
+                    help="Enable IMU-based rotation outlier filtering in global SfM (off by default).")
+parser.add_argument("--disable_reestimate_rotation", action="store_true",
+                    help="Disable IMU geometric-filter rotation re-estimation pass.")
+parser.add_argument("--imu_reestimate_prec", type=float, default=15.0,
+                    help="Pixel threshold for IMU re-estimation pass (-Q).")
+parser.add_argument("--imu_pitch_roll_only", action="store_true",
+                    help="Use IMU pitch/roll only (ignore compass yaw) during IMU geometric filtering.")
+parser.add_argument("--enable_close_time_adaptive_filtering", dest="close_time_adaptive_filtering", action="store_true",
+                    help="Enable close-time adaptive filtering in global SfM (disabled by default).")
 parser.add_argument("-gp", "--geofilt_prec", type=float, default=0.0, help="Geometric filter precision (max pixel error). Use 0.0 for Auto (found by RANSAC math).")
 parser.add_argument("-mi", "--min_inliers", type=int, default=50, help="Minimum inlier count per pair.")
-parser.add_argument("-ri", "--ransac_iter", type=int, default=512, help="RANSAC iterations for geometric filter.")
+parser.add_argument("-ri", "--ransac_iter", type=int, default=1024, help="RANSAC iterations for geometric filter.")
 parser.add_argument("--use_plain_geometric_filter", action="store_true",
                     help="Use openMVG_main_GeometricFilter with -g e (no priors), instead of openMVG_main_GeometricFilterWithPriors -g i.")
 parser.add_argument("--excluded_pairs_file", type=str, default="",
                     help="Optional JSON file of excluded image pairs. If not set, uses matches/excluded_pairs.json when present.")
-parser.set_defaults(imu_rotation_filter_outliers=True)
 parser.add_argument("input_dir", help="Input directory containing the images.")
 parser.add_argument("output_dir", help="Output directory where the project files will be saved.")
 
@@ -144,6 +149,10 @@ with open(log_path, "a") as log_file:
            log_file)
 
   if args.use_plain_geometric_filter:
+    mode_msg = "Geometric filter mode: e (plain essential, no priors)\n"
+    print(mode_msg.strip())
+    log_file.write(mode_msg)
+    log_file.flush()
     # 5. Filter matches with original geometric filter (no priors).
     run_step("5. Filter matches with geometric filter (-g e, no priors)",
              [os.path.join(OPENMVG_SFM_BIN, "openMVG_main_GeometricFilter"),
@@ -162,19 +171,28 @@ with open(log_path, "a") as log_file:
     #   - Reduce RANSAC from 5-point to 2-point (known R, solve for t only)
     #   - Run only 64 RANSAC iterations instead of 1024+ (much faster!)
     # Result: ~4x speedup vs GPS heading method, more accurate filtering
-    run_step("5. Filter matches with IMU-guided solver",
-             [os.path.join(OPENMVG_SFM_BIN, "openMVG_main_GeometricFilterWithPriors"),
-              "-i", matches_dir+"/sfm_data.json",
-              "-m", matches_dir+"/matches.putative.bin",
-              "-g", "i",     # IMU-guided 2-point solver
-              "-o", matches_dir+"/matches.e.bin",
-              "-I", str(args.ransac_iter),    # Iterations
-              "-t", "50.0",   # RANSAC search limit (fixed bound)
-              "-M", str(args.min_inliers),    # Min inlier count per pair
-              "-T", str(args.geofilt_prec), # User-defined filter precision (0.0=Auto)
-              # "-c", "1000"   # Optional: Regions cache size (1000 images)
-              ],
-             log_file)
+    imu_model = "p" if args.imu_pitch_roll_only else "i"
+    imu_mode_name = "p (IMU pitch/roll only)" if imu_model == "p" else "i (IMU full rotation)"
+    mode_msg = "Geometric filter mode: {}\n".format(imu_mode_name)
+    print(mode_msg.strip())
+    log_file.write(mode_msg)
+    log_file.flush()
+    geofilt_cmd = [os.path.join(OPENMVG_SFM_BIN, "openMVG_main_GeometricFilterWithPriors"),
+                   "-i", matches_dir+"/sfm_data.json",
+                   "-m", matches_dir+"/matches.putative.bin",
+                   "-g", imu_model,     # IMU-guided solver (full R or pitch/roll-only)
+                   "-o", matches_dir+"/matches.e.bin",
+                   "-I", str(args.ransac_iter),    # Iterations
+                   "-t", "50.0",   # RANSAC search limit (fixed bound)
+                   "-M", str(args.min_inliers),    # Min inlier count per pair
+                   "-T", str(args.geofilt_prec), # User-defined filter precision (0.0=Auto)
+                   # "-c", "1000"   # Optional: Regions cache size (1000 images)
+                   ]
+    if not args.disable_reestimate_rotation:
+      geofilt_cmd.append("-U")
+    if args.imu_reestimate_prec is not None:
+      geofilt_cmd.extend(["-Q", str(args.imu_reestimate_prec)])
+    run_step("5. Filter matches with IMU-guided solver", geofilt_cmd, log_file)
 
   # 5b. Optional: Additional post-filtering by priors (now mostly redundant since priors are in step 5)
   # Uncomment if you want stricter filtering after RANSAC
@@ -221,7 +239,9 @@ with open(log_path, "a") as log_file:
              "--imu_rotation_weight", str(args.imu_rotation_weight),
              "--imu_rotation_max_error", str(args.imu_rotation_max_error),
              "--imu_rotation_histogram_bucket", str(args.imu_rotation_histogram_bucket),
-             "--imu_rotation_filter_outliers", "1" if args.imu_rotation_filter_outliers else "0"]
+             "--imu_rotation_filter_outliers", "1" if args.imu_rotation_filter_outliers else "0",
+            #  "--imu_rotation_filter_outliers", "1",
+             "--close_time_adaptive_filtering", "1" if args.close_time_adaptive_filtering else "0"]
   if excluded_pairs_file:
     sfm_cmd.extend(["--excluded_pairs_file", excluded_pairs_file])
 

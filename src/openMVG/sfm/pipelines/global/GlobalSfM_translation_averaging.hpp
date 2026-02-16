@@ -40,6 +40,7 @@ class GlobalSfM_Translation_AveragingSolver
 {
   std::vector<RelativeInfo_Vec> vec_relative_motion_;
   std::string output_dir_;
+  bool close_time_adaptive_filtering_ = true;
 
 public:
 
@@ -50,7 +51,8 @@ public:
     const openMVG::sfm::Matches_Provider * matches_provider,
     const Hash_Map<IndexT, Mat3> & map_globalR,
     matching::PairWiseMatches & tripletWise_matches,
-    const std::string & output_dir
+    const std::string & output_dir,
+    bool close_time_adaptive_filtering
   );
 
 private:
@@ -89,7 +91,10 @@ private:
     double & dPrecision, // UpperBound of the precision found by the AContrario estimator
     std::vector<uint32_t> & vec_inliers,
     openMVG::tracks::STLMAPTracks & rig_tracks,
-    const std::string & sOutDirectory) const;
+    const std::string & sOutDirectory,
+    bool allow_close_time_relaxed,
+    bool * accepted_by_legacy = nullptr,
+    bool * accepted_by_close_time_only = nullptr) const;
 };
 
 } // namespace sfm

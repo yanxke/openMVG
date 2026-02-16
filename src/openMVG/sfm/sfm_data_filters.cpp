@@ -12,10 +12,120 @@
 #include "openMVG/system/logger.hpp"
 #include "openMVG/tracks/union_find.hpp"
 
+#include <cmath>
+#include <unordered_map>
 #include <utility>
 
 namespace openMVG {
 namespace sfm {
+
+namespace {
+
+std::unordered_map<IndexT, double> BuildViewCaptureTimeSeconds(const SfM_Data & sfm_data)
+{
+  std::unordered_map<IndexT, double> view_time_seconds;
+  view_time_seconds.reserve(sfm_data.GetViews().size());
+  for (const auto & view_it : sfm_data.GetViews())
+  {
+    const View * view = view_it.second.get();
+    if (!view || !view->b_has_capture_time_epoch_ || !std::isfinite(view->capture_time_epoch_))
+    {
+      continue;
+    }
+    view_time_seconds.emplace(view->id_view, view->capture_time_epoch_);
+  }
+  return view_time_seconds;
+}
+
+bool IsCloseTimePair(
+  const std::unordered_map<IndexT, double> & view_time_seconds,
+  const IndexT view_a,
+  const IndexT view_b,
+  const double close_time_seconds)
+{
+  const auto it_a = view_time_seconds.find(view_a);
+  const auto it_b = view_time_seconds.find(view_b);
+  if (it_a == view_time_seconds.end() || it_b == view_time_seconds.end())
+  {
+    return false;
+  }
+  return std::abs(it_a->second - it_b->second) < close_time_seconds;
+}
+
+bool HasCloseTimeObservationPair(
+  const Observations & obs,
+  const std::unordered_map<IndexT, double> & view_time_seconds,
+  const double close_time_seconds)
+{
+  for (auto it_obs1 = obs.begin(); it_obs1 != obs.end(); ++it_obs1)
+  {
+    auto it_obs2 = it_obs1;
+    ++it_obs2;
+    for (; it_obs2 != obs.end(); ++it_obs2)
+    {
+      if (IsCloseTimePair(view_time_seconds, it_obs1->first, it_obs2->first, close_time_seconds))
+      {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+bool eraseObservationsWithMissingPosesAdaptive
+(
+  SfM_Data & sfm_data,
+  const IndexT min_points_per_landmark_default,
+  const IndexT min_points_per_landmark_close,
+  const double closeTimeSeconds
+)
+{
+  IndexT removed_elements = 0;
+  const auto view_time_seconds = BuildViewCaptureTimeSeconds(sfm_data);
+
+  std::set<IndexT> pose_Index;
+  std::transform(
+    sfm_data.poses.cbegin(),
+    sfm_data.poses.cend(),
+    std::inserter(pose_Index, pose_Index.begin()),
+    stl::RetrieveKey());
+
+  Landmarks::iterator itLandmarks = sfm_data.structure.begin();
+  while (itLandmarks != sfm_data.structure.end())
+  {
+    Observations & obs = itLandmarks->second.obs;
+    Observations::iterator itObs = obs.begin();
+    while (itObs != obs.end())
+    {
+      const IndexT ViewId = itObs->first;
+      const View * v = sfm_data.GetViews().at(ViewId).get();
+      if (pose_Index.count(v->id_pose) == 0)
+      {
+        itObs = obs.erase(itObs);
+        ++removed_elements;
+      }
+      else
+      {
+        ++itObs;
+      }
+    }
+
+    const bool has_close_time_pair = HasCloseTimeObservationPair(obs, view_time_seconds, closeTimeSeconds);
+    const IndexT required_track_length =
+      has_close_time_pair ? min_points_per_landmark_close : min_points_per_landmark_default;
+    if (obs.empty() || obs.size() < required_track_length)
+    {
+      itLandmarks = sfm_data.structure.erase(itLandmarks);
+    }
+    else
+    {
+      ++itLandmarks;
+    }
+  }
+  return removed_elements > 0;
+}
+
+} // namespace
 
 /// List the view indexes that have valid camera intrinsic and pose.
 std::set<IndexT> Get_Valid_Views
@@ -72,6 +182,80 @@ IndexT RemoveOutliers_PixelResidualError
   return outlier_count;
 }
 
+IndexT RemoveOutliers_PixelResidualErrorAdaptive
+(
+  SfM_Data & sfm_data,
+  const double dThresholdPixel,
+  const double dThresholdPixelCloseTime,
+  const double closeTimeSeconds,
+  PixelResidualAdaptiveStats * stats,
+  const unsigned int minTrackLength
+)
+{
+  const auto view_time_seconds = BuildViewCaptureTimeSeconds(sfm_data);
+
+  if (stats)
+  {
+    *stats = PixelResidualAdaptiveStats();
+  }
+
+  IndexT outlier_count = 0;
+  Landmarks::iterator iterTracks = sfm_data.structure.begin();
+  while (iterTracks != sfm_data.structure.end())
+  {
+    Observations & obs = iterTracks->second.obs;
+    const bool has_close_time_pair =
+      HasCloseTimeObservationPair(obs, view_time_seconds, closeTimeSeconds);
+    const double threshold_pixel =
+      has_close_time_pair ? dThresholdPixelCloseTime : dThresholdPixel;
+
+    Observations::iterator itObs = obs.begin();
+    while (itObs != obs.end())
+    {
+      const View * view = sfm_data.views.at(itObs->first).get();
+      const geometry::Pose3 pose = sfm_data.GetPoseOrDie(view);
+      const cameras::IntrinsicBase * intrinsic = sfm_data.intrinsics.at(view->id_intrinsic).get();
+      const Vec2 residual = intrinsic->residual(pose(iterTracks->second.X), itObs->second.x);
+      const double residual_norm = residual.norm();
+      const bool old_logic_outlier = residual_norm > dThresholdPixel;
+      const bool adaptive_outlier = residual_norm > threshold_pixel;
+
+      if (stats && old_logic_outlier)
+      {
+        ++stats->old_logic_outlier_observations;
+      }
+      if (stats && old_logic_outlier && !adaptive_outlier)
+      {
+        ++stats->rescued_observations;
+      }
+
+      if (adaptive_outlier)
+      {
+        ++outlier_count;
+        if (stats)
+        {
+          ++stats->removed_observations;
+        }
+        itObs = obs.erase(itObs);
+      }
+      else
+      {
+        ++itObs;
+      }
+    }
+
+    if (obs.empty() || obs.size() < minTrackLength)
+    {
+      iterTracks = sfm_data.structure.erase(iterTracks);
+    }
+    else
+    {
+      ++iterTracks;
+    }
+  }
+  return outlier_count;
+}
+
 // Remove tracks that have a small angle (tracks with tiny angle leads to instable 3D points)
 // Return the number of removed tracks
 IndexT RemoveOutliers_AngleError
@@ -114,6 +298,86 @@ IndexT RemoveOutliers_AngleError
     }
     else
       ++iterTracks;
+  }
+  return removedTrack_count;
+}
+
+IndexT RemoveOutliers_AngleErrorAdaptive
+(
+  SfM_Data & sfm_data,
+  const double dMinAcceptedAngle,
+  const double dMinAcceptedAngleCloseTime,
+  const double closeTimeSeconds,
+  AngleErrorAdaptiveStats * stats
+)
+{
+  const auto view_time_seconds = BuildViewCaptureTimeSeconds(sfm_data);
+
+  if (stats)
+  {
+    *stats = AngleErrorAdaptiveStats();
+  }
+
+  IndexT removedTrack_count = 0;
+  Landmarks::iterator iterTracks = sfm_data.structure.begin();
+  while (iterTracks != sfm_data.structure.end())
+  {
+    Observations & obs = iterTracks->second.obs;
+    double max_angle = 0.0;
+    double max_close_time_angle = 0.0;
+    bool has_close_time_pair = false;
+
+    for (Observations::const_iterator itObs1 = obs.begin(); itObs1 != obs.end(); ++itObs1)
+    {
+      const View * view1 = sfm_data.views.at(itObs1->first).get();
+      const geometry::Pose3 pose1 = sfm_data.GetPoseOrDie(view1);
+      const cameras::IntrinsicBase * intrinsic1 = sfm_data.intrinsics.at(view1->id_intrinsic).get();
+
+      Observations::const_iterator itObs2 = itObs1;
+      ++itObs2;
+      for (; itObs2 != obs.end(); ++itObs2)
+      {
+        const View * view2 = sfm_data.views.at(itObs2->first).get();
+        const geometry::Pose3 pose2 = sfm_data.GetPoseOrDie(view2);
+        const cameras::IntrinsicBase * intrinsic2 = sfm_data.intrinsics.at(view2->id_intrinsic).get();
+
+        const double angle = AngleBetweenRay(
+          pose1, intrinsic1, pose2, intrinsic2,
+          intrinsic1->get_ud_pixel(itObs1->second.x), intrinsic2->get_ud_pixel(itObs2->second.x));
+        max_angle = std::max(angle, max_angle);
+
+        if (IsCloseTimePair(view_time_seconds, view1->id_view, view2->id_view, closeTimeSeconds))
+        {
+          has_close_time_pair = true;
+          max_close_time_angle = std::max(max_close_time_angle, angle);
+        }
+      }
+    }
+
+    const bool keep_by_default = max_angle >= dMinAcceptedAngle;
+    const bool keep_by_close_time = has_close_time_pair && max_close_time_angle >= dMinAcceptedAngleCloseTime;
+    if (stats && !keep_by_default)
+    {
+      ++stats->old_logic_outlier_tracks;
+    }
+    if (stats && !keep_by_default && keep_by_close_time)
+    {
+      ++stats->rescued_tracks;
+    }
+
+    if (!(keep_by_default || keep_by_close_time))
+    {
+      iterTracks = sfm_data.structure.erase(iterTracks);
+      ++removedTrack_count;
+      if (stats)
+      {
+        ++stats->removed_tracks;
+      }
+    }
+    else
+    {
+      ++iterTracks;
+    }
   }
   return removedTrack_count;
 }
@@ -217,6 +481,41 @@ bool eraseUnstablePosesAndObservations
     {
       bRemovedContent = eraseObservationsWithMissingPoses(sfm_data, min_points_per_landmark);
       // Erase some observations can make some Poses index disappear so perform the process in a loop
+    }
+    remove_iteration += bRemovedContent ? 1 : 0;
+  }
+  while (bRemovedContent);
+
+  return remove_iteration > 0;
+}
+
+bool eraseUnstablePosesAndObservationsAdaptive
+(
+  SfM_Data & sfm_data,
+  const IndexT min_points_per_pose,
+  const IndexT min_points_per_landmark_default,
+  const IndexT min_points_per_landmark_close,
+  const double closeTimeSeconds
+)
+{
+  eraseObservationsWithMissingPosesAdaptive(
+    sfm_data,
+    min_points_per_landmark_default,
+    min_points_per_landmark_close,
+    closeTimeSeconds);
+
+  IndexT remove_iteration = 0;
+  bool bRemovedContent = false;
+  do
+  {
+    bRemovedContent = false;
+    if (eraseMissingPoses(sfm_data, min_points_per_pose))
+    {
+      bRemovedContent = eraseObservationsWithMissingPosesAdaptive(
+        sfm_data,
+        min_points_per_landmark_default,
+        min_points_per_landmark_close,
+        closeTimeSeconds);
     }
     remove_iteration += bRemovedContent ? 1 : 0;
   }

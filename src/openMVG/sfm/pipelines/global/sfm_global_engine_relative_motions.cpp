@@ -9,7 +9,7 @@
 #include "openMVG/sfm/pipelines/global/sfm_global_engine_relative_motions.hpp"
 
 #include "openMVG/cameras/Camera_Common.hpp"
-#include "openMVG/exif/exif_IO_EasyExif.hpp"
+#include "openMVG/graph/connectedComponent.hpp"
 #include "openMVG/graph/graph.hpp"
 #include "openMVG/features/feature.hpp"
 #include "openMVG/matching/indMatch.hpp"
@@ -52,39 +52,14 @@
 
 namespace {
 
-bool ParseImuRotationFromUserComment(const std::string & comment, openMVG::Mat3 & rotation_dw)
-{
-  const std::string key = "Rotation:";
-  const std::size_t pos = comment.find(key);
-  if (pos == std::string::npos)
-    return false;
-
-  std::string rot_part = comment.substr(pos + key.size());
-  for (char & c : rot_part)
-  {
-    if (c == '\n' || c == '\r')
-      c = ' ';
-  }
-
-  std::vector<double> vals;
-  vals.reserve(9);
-  std::string token;
-  std::stringstream ss(rot_part);
-  while (std::getline(ss, token, ','))
-  {
-    std::stringstream t(token);
-    double v = 0.0;
-    if (t >> v)
-      vals.push_back(v);
-  }
-  if (vals.size() < 9)
-    return false;
-
-  rotation_dw << vals[0], vals[1], vals[2],
-                  vals[3], vals[4], vals[5],
-                  vals[6], vals[7], vals[8];
-  return true;
-}
+constexpr double kCloseTimeSeconds = 0.75;
+// Adaptive angle filter thresholds used when close-time adaptive filtering is enabled.
+// - kDefaultMinTriangulationAngleDeg: legacy minimum triangulation angle.
+// - kCloseTimeMinTriangulationAngleDeg: relaxed minimum angle for close-time observation pairs.
+constexpr double kDefaultMinTriangulationAngleDeg = 2.0;
+constexpr double kCloseTimeMinTriangulationAngleDeg = 1.0;
+constexpr double kDefaultPixelResidualThresholdPx = 4.0;
+constexpr double kCloseTimePixelResidualThresholdPx = 8.0;
 
 openMVG::Mat3 DeviceToCameraRotation()
 {
@@ -113,6 +88,18 @@ double RotationAngularErrorDeg(const openMVG::Mat3 & R_est, const openMVG::Mat3 
 {
   const openMVG::Mat3 R_err = R_est * R_prior.transpose();
   return openMVG::R2D(openMVG::getRotationMagnitude(R_err));
+}
+
+bool AreViewsCloseInTime(
+  const openMVG::sfm::View * view_a,
+  const openMVG::sfm::View * view_b)
+{
+  if (!view_a || !view_b ||
+      !view_a->b_has_capture_time_epoch_ || !view_b->b_has_capture_time_epoch_)
+  {
+    return false;
+  }
+  return std::abs(view_a->capture_time_epoch_ - view_b->capture_time_epoch_) < kCloseTimeSeconds;
 }
 
 openMVG::Mat3 BestFitRotation(const std::vector<std::pair<openMVG::Mat3, openMVG::Mat3>> & pairs)
@@ -160,6 +147,111 @@ std::string ViewImagePath(const openMVG::sfm::SfM_Data & sfm_data, openMVG::Inde
   if (it == sfm_data.GetViews().end() || !it->second)
     return std::string();
   return it->second->s_Img_path;
+}
+
+std::string EscapeCsvField(const std::string & value)
+{
+  if (value.find_first_of(",\"\n\r") == std::string::npos)
+  {
+    return value;
+  }
+
+  std::string escaped = "\"";
+  for (const char c : value)
+  {
+    if (c == '"')
+    {
+      escaped += "\"\"";
+    }
+    else
+    {
+      escaped += c;
+    }
+  }
+  escaped += "\"";
+  return escaped;
+}
+
+void WriteNonMainComponentsCsv(
+  const std::string & path,
+  const openMVG::sfm::SfM_Data & sfm_data,
+  const openMVG::Pair_Set & pairs)
+{
+  if (pairs.empty())
+  {
+    return;
+  }
+
+  openMVG::graph::indexedGraph putative_graph(pairs);
+  using Graph = openMVG::graph::indexedGraph::GraphT;
+  using EdgeMap = Graph::EdgeMap<bool>;
+  EdgeMap cut_map(putative_graph.g);
+
+  if (lemon::biEdgeConnectedCutEdges(putative_graph.g, cut_map) > 0)
+  {
+    using EdgeIterator = Graph::EdgeIt;
+    EdgeIterator edge_it(putative_graph.g);
+    for (EdgeMap::MapIt map_it(cut_map); map_it != lemon::INVALID; ++map_it, ++edge_it)
+    {
+      if (*map_it)
+      {
+        putative_graph.g.erase(edge_it);
+      }
+    }
+  }
+
+  const std::map<openMVG::IndexT, std::set<Graph::Node>> components =
+    openMVG::graph::exportGraphToMapSubgraphs<Graph, openMVG::IndexT>(putative_graph.g);
+  if (components.size() <= 1)
+  {
+    return;
+  }
+
+  openMVG::IndexT largest_component_id = openMVG::UndefinedIndexT;
+  size_t largest_size = 0;
+  for (const auto & component_it : components)
+  {
+    if (component_it.second.size() > largest_size)
+    {
+      largest_size = component_it.second.size();
+      largest_component_id = component_it.first;
+    }
+  }
+
+  OPENMVG_LOG_INFO << "Writing CSV: " << path;
+  std::ofstream csv(path.c_str());
+  if (!csv.is_open())
+  {
+    OPENMVG_LOG_WARNING << "Cannot write non-main-components CSV: " << path;
+    return;
+  }
+
+  csv << "component_id,camera_id,image_id,image_name\n";
+  for (const auto & component_it : components)
+  {
+    if (component_it.first == largest_component_id)
+    {
+      continue;
+    }
+
+    for (const auto & node : component_it.second)
+    {
+      const openMVG::IndexT image_id = (*putative_graph.node_map_id)[node];
+      openMVG::IndexT camera_id = openMVG::UndefinedIndexT;
+      std::string image_name;
+      const auto view_it = sfm_data.GetViews().find(image_id);
+      if (view_it != sfm_data.GetViews().end() && view_it->second)
+      {
+        camera_id = view_it->second->id_pose;
+        image_name = view_it->second->s_Img_path;
+      }
+
+      csv << component_it.first << ","
+          << camera_id << ","
+          << image_id << ","
+          << EscapeCsvField(image_name) << "\n";
+    }
+  }
 }
 
 void WriteRotationsCsv(const std::string & path,
@@ -232,16 +324,44 @@ void WritePosesCsv(const std::string & path, const openMVG::sfm::SfM_Data & sfm_
 
 void WriteRelativeRotationsCsv(const std::string & path,
                                const openMVG::sfm::SfM_Data & sfm_data,
-                               const openMVG::rotation_averaging::RelativeRotations & relatives_R)
+                               const openMVG::rotation_averaging::RelativeRotations & relatives_R,
+                               const openMVG::Hash_Map<openMVG::IndexT, openMVG::Mat3> * transformed_imu_pose_rotations = nullptr)
 {
   OPENMVG_LOG_INFO << "Writing CSV: " << path;
   std::ofstream csv(path.c_str());
   if (!csv)
     return;
 
+  openMVG::Hash_Map<openMVG::IndexT, openMVG::Mat3> imu_pose_rotations;
+  for (const auto & view_it : sfm_data.GetViews())
+  {
+    const openMVG::sfm::View * view = view_it.second.get();
+    if (!view || view->id_pose == openMVG::UndefinedIndexT)
+      continue;
+
+    const auto * view_priors =
+      dynamic_cast<const openMVG::sfm::ViewPriors *>(view);
+    if (!view_priors || !view_priors->b_has_imu_rotation_)
+      continue;
+
+    // Prefer transformed IMU rotations (same convention used by global SfM),
+    // and only fallback to raw view priors when transformed rotations are unavailable.
+    if (transformed_imu_pose_rotations)
+    {
+      const auto transformed_it = transformed_imu_pose_rotations->find(view->id_pose);
+      if (transformed_it != transformed_imu_pose_rotations->end())
+      {
+        imu_pose_rotations[view->id_pose] = transformed_it->second;
+        continue;
+      }
+    }
+    imu_pose_rotations[view->id_pose] = view_priors->imu_rotation_;
+  }
+
   const auto pose_to_view = BuildPoseToViewMap(sfm_data);
 
-  csv << "pose_i,pose_j,view_i,view_j,image_i,image_j,qw,qx,qy,qz,weight\n";
+  csv << "pose_i,pose_j,view_i,view_j,image_i,image_j,qw,qx,qy,qz,weight,"
+         "imu_relative_rotation_error_deg,imu_relative_rotation_error_mode\n";
   csv << std::fixed << std::setprecision(10);
   for (const auto & rel : relatives_R)
   {
@@ -265,11 +385,31 @@ void WriteRelativeRotationsCsv(const std::string & path,
       image_j = ViewImagePath(sfm_data, view_j);
     }
 
+    std::string err_deg_csv;
+    std::string err_mode_csv;
+    const auto imu_i_it = imu_pose_rotations.find(rel.i);
+    const auto imu_j_it = imu_pose_rotations.find(rel.j);
+    if (imu_i_it != imu_pose_rotations.end() && imu_j_it != imu_pose_rotations.end())
+    {
+      const openMVG::Mat3 rel_imu = imu_j_it->second * imu_i_it->second.transpose();
+      const double err_direct_deg = RotationAngularErrorDeg(rel.Rij, rel_imu);
+      const double err_transpose_deg = RotationAngularErrorDeg(rel.Rij.transpose(), rel_imu);
+      const double err_deg = std::min(err_direct_deg, err_transpose_deg);
+      const char * mode = (err_direct_deg <= err_transpose_deg) ? "direct" : "transpose";
+
+      std::ostringstream err_ss;
+      err_ss << std::fixed << std::setprecision(10) << err_deg;
+      err_deg_csv = err_ss.str();
+      err_mode_csv = mode;
+    }
+
     csv << rel.i << "," << rel.j << ","
         << view_i << "," << view_j << ","
         << image_i << "," << image_j << ","
         << q.w() << "," << q.x() << "," << q.y() << "," << q.z() << ","
-        << rel.weight << "\n";
+        << rel.weight << ","
+        << err_deg_csv << ","
+        << err_mode_csv << "\n";
   }
 }
 
@@ -472,6 +612,11 @@ void GlobalSfMReconstructionEngine_RelativeMotions::SetImuRotationPrior(
   imu_rotation_histogram_bucket_deg_ = histogram_bucket_deg;
 }
 
+void GlobalSfMReconstructionEngine_RelativeMotions::SetCloseTimeAdaptiveFiltering(bool enabled)
+{
+  close_time_adaptive_filtering_ = enabled;
+}
+
 bool GlobalSfMReconstructionEngine_RelativeMotions::Process() {
 
   //-------------------
@@ -480,6 +625,13 @@ bool GlobalSfMReconstructionEngine_RelativeMotions::Process() {
   {
     const Pair_Set pairs = matches_provider_->getPairs();
     const std::set<IndexT> set_remainingIds = graph::CleanGraph_KeepLargestBiEdge_Nodes<Pair_Set, IndexT>(pairs);
+    if (!sOut_directory_.empty())
+    {
+      WriteNonMainComponentsCsv(
+        stlplus::create_filespec(sOut_directory_, "sfm_non_main_components", "csv"),
+        sfm_data_,
+        pairs);
+    }
     if (set_remainingIds.empty())
     {
       OPENMVG_LOG_WARNING << "Invalid input image graph for global SfM";
@@ -557,7 +709,7 @@ bool GlobalSfMReconstructionEngine_RelativeMotions::Compute_Global_Rotations
   {
     const std::string csv_path =
       stlplus::create_filespec(sOut_directory_, "relative_rotations_before_rotation_averaging", "csv");
-    WriteRelativeRotationsCsv(csv_path, sfm_data_, relatives_R);
+    WriteRelativeRotationsCsv(csv_path, sfm_data_, relatives_R, &imu_pose_rotations_);
   }
   // Log statistics about the relative rotation graph
   {
@@ -583,6 +735,7 @@ bool GlobalSfMReconstructionEngine_RelativeMotions::Compute_Global_Rotations
   IndexT world_pose_id = UndefinedIndexT;
   size_t imu_prior_count = 0;
   size_t imu_filtered_count = 0;
+  size_t imu_filtered_edge_count = 0;
   std::set<IndexT> imu_filtered_pose_ids;
   if (imu_rotation_weight_ > 0.0 && !imu_pose_rotations_.empty())
   {
@@ -630,48 +783,98 @@ bool GlobalSfMReconstructionEngine_RelativeMotions::Compute_Global_Rotations
 
   bool b_rotation_averaging = run_rotation_averaging(relatives_with_priors);
   if (b_rotation_averaging && imu_rotation_filter_outliers_ &&
-      imu_rotation_weight_ > 0.0 && !imu_pose_rotations_.empty() &&
+      !imu_pose_rotations_.empty() &&
       imu_rotation_max_error_deg_ > 0.0)
   {
-    std::vector<IndexT> outlier_pose_ids;
-    for (const auto & imu_it : imu_pose_rotations_)
+    if (imu_rotation_weight_ > 0.0)
     {
-      const auto it = global_rotations.find(imu_it.first);
-      if (it == global_rotations.end())
-        continue;
-      const double err_deg = RotationAngularErrorDeg(it->second, imu_it.second);
-      if (err_deg > imu_rotation_max_error_deg_)
-        outlier_pose_ids.push_back(imu_it.first);
-    }
-
-    if (!outlier_pose_ids.empty())
-    {
-      imu_filtered_pose_ids.insert(outlier_pose_ids.begin(), outlier_pose_ids.end());
-      imu_filtered_count = outlier_pose_ids.size();
-      OPENMVG_LOG_WARNING << "IMU rotation prior filtering: removing "
-                          << outlier_pose_ids.size() << " / "
-                          << imu_pose_rotations_.size()
-                          << " priors with error > "
-                          << imu_rotation_max_error_deg_ << " deg.";
-
-      rotation_averaging::RelativeRotations filtered_rels = relatives_R;
+      std::vector<IndexT> outlier_pose_ids;
       for (const auto & imu_it : imu_pose_rotations_)
       {
-        if (std::find(outlier_pose_ids.begin(), outlier_pose_ids.end(), imu_it.first) != outlier_pose_ids.end())
+        const auto it = global_rotations.find(imu_it.first);
+        if (it == global_rotations.end())
           continue;
-        filtered_rels.emplace_back(
-          world_pose_id, imu_it.first, imu_it.second,
-          static_cast<float>(imu_rotation_weight_));
+        const double err_deg = RotationAngularErrorDeg(it->second, imu_it.second);
+        if (err_deg > imu_rotation_max_error_deg_)
+          outlier_pose_ids.push_back(imu_it.first);
       }
-      b_rotation_averaging = run_rotation_averaging(filtered_rels);
-      imu_prior_count = imu_pose_rotations_.size() - outlier_pose_ids.size();
+
+      if (!outlier_pose_ids.empty())
+      {
+        imu_filtered_pose_ids.insert(outlier_pose_ids.begin(), outlier_pose_ids.end());
+        imu_filtered_count = outlier_pose_ids.size();
+        OPENMVG_LOG_WARNING << "IMU rotation prior filtering: removing "
+                            << outlier_pose_ids.size() << " / "
+                            << imu_pose_rotations_.size()
+                            << " priors with error > "
+                            << imu_rotation_max_error_deg_ << " deg.";
+
+        rotation_averaging::RelativeRotations filtered_rels = relatives_R;
+        for (const auto & imu_it : imu_pose_rotations_)
+        {
+          if (std::find(outlier_pose_ids.begin(), outlier_pose_ids.end(), imu_it.first) != outlier_pose_ids.end())
+            continue;
+          filtered_rels.emplace_back(
+            world_pose_id, imu_it.first, imu_it.second,
+            static_cast<float>(imu_rotation_weight_));
+        }
+        b_rotation_averaging = run_rotation_averaging(filtered_rels);
+        imu_prior_count = imu_pose_rotations_.size() - outlier_pose_ids.size();
+      }
+      else
+      {
+        OPENMVG_LOG_INFO << "IMU rotation prior filtering: removed 0 / "
+                         << imu_pose_rotations_.size()
+                         << " priors with error > "
+                         << imu_rotation_max_error_deg_ << " deg.";
+      }
     }
     else
     {
-      OPENMVG_LOG_INFO << "IMU rotation prior filtering: removed 0 / "
-                       << imu_pose_rotations_.size()
-                       << " priors with error > "
-                       << imu_rotation_max_error_deg_ << " deg.";
+      // Independent IMU filtering path (works even with zero IMU prior weight):
+      // remove relative-rotation edges that strongly disagree with IMU pairwise rotation.
+      rotation_averaging::RelativeRotations filtered_relatives;
+      filtered_relatives.reserve(relatives_R.size());
+      size_t comparable_edges = 0;
+
+      for (const auto & rel : relatives_R)
+      {
+        bool keep = true;
+        const auto imu_i_it = imu_pose_rotations_.find(rel.i);
+        const auto imu_j_it = imu_pose_rotations_.find(rel.j);
+        if (imu_i_it != imu_pose_rotations_.end() && imu_j_it != imu_pose_rotations_.end())
+        {
+          ++comparable_edges;
+          const Mat3 rel_imu = imu_j_it->second * imu_i_it->second.transpose();
+          const double err_direct_deg = RotationAngularErrorDeg(rel.Rij, rel_imu);
+          const double err_transpose_deg = RotationAngularErrorDeg(rel.Rij.transpose(), rel_imu);
+          const double err_deg = std::min(err_direct_deg, err_transpose_deg);
+          if (err_deg > imu_rotation_max_error_deg_)
+          {
+            keep = false;
+            ++imu_filtered_edge_count;
+          }
+        }
+        if (keep)
+          filtered_relatives.push_back(rel);
+      }
+
+      if (imu_filtered_edge_count > 0)
+      {
+        OPENMVG_LOG_WARNING
+          << "IMU relative-rotation filtering (weight=0): removing "
+          << imu_filtered_edge_count << " / " << comparable_edges
+          << " comparable relative-rotation edges with error > "
+          << imu_rotation_max_error_deg_ << " deg.";
+        b_rotation_averaging = run_rotation_averaging(filtered_relatives);
+      }
+      else
+      {
+        OPENMVG_LOG_INFO
+          << "IMU relative-rotation filtering (weight=0): removed 0 / "
+          << comparable_edges << " comparable relative-rotation edges with error > "
+          << imu_rotation_max_error_deg_ << " deg.";
+      }
     }
   }
 
@@ -681,13 +884,31 @@ bool GlobalSfMReconstructionEngine_RelativeMotions::Compute_Global_Rotations
       << "IMU rotation prior settings: weight=" << imu_rotation_weight_
       << ", max_error_deg=" << imu_rotation_max_error_deg_
       << ", filter_outliers=" << (imu_rotation_filter_outliers_ ? "true" : "false")
-      << ", filtered=" << imu_filtered_count;
+      << ", filtered_priors=" << imu_filtered_count
+      << ", filtered_edges=" << imu_filtered_edge_count;
 
-    std::vector<double> imu_errors_deg;
-    imu_errors_deg.reserve(imu_pose_rotations_.size());
+    auto median_of = [](std::vector<double> values) -> double
+    {
+      if (values.empty())
+        return std::numeric_limits<double>::quiet_NaN();
+      const size_t mid = values.size() / 2;
+      std::nth_element(values.begin(), values.begin() + mid, values.end());
+      double med = values[mid];
+      if (values.size() % 2 == 0)
+      {
+        const auto max_low_it = std::max_element(values.begin(), values.begin() + mid);
+        med = 0.5 * (med + *max_low_it);
+      }
+      return med;
+    };
+
+    std::vector<std::pair<Mat3, Mat3>> imu_pairs_base;
+    imu_pairs_base.reserve(imu_pose_rotations_.size());
+    std::vector<double> imu_errors_direct_deg;
+    std::vector<double> imu_errors_transpose_deg;
+    imu_errors_direct_deg.reserve(imu_pose_rotations_.size());
+    imu_errors_transpose_deg.reserve(imu_pose_rotations_.size());
     size_t missing_global = 0;
-    std::vector<std::pair<Mat3, Mat3>> imu_pairs;
-    imu_pairs.reserve(imu_pose_rotations_.size());
     for (const auto & imu_it : imu_pose_rotations_)
     {
       if (imu_filtered_pose_ids.count(imu_it.first) > 0)
@@ -698,10 +919,36 @@ bool GlobalSfMReconstructionEngine_RelativeMotions::Compute_Global_Rotations
         ++missing_global;
         continue;
       }
-      const double err_deg = RotationAngularErrorDeg(it->second, imu_it.second);
-      imu_errors_deg.push_back(err_deg);
-      imu_pairs.emplace_back(it->second, imu_it.second);
+      const Mat3 & R_global = it->second;
+      const Mat3 & R_imu = imu_it.second;
+      imu_pairs_base.emplace_back(R_global, R_imu);
+      imu_errors_direct_deg.push_back(RotationAngularErrorDeg(R_global, R_imu));
+      imu_errors_transpose_deg.push_back(RotationAngularErrorDeg(R_global, R_imu.transpose()));
     }
+
+    const double direct_median = median_of(imu_errors_direct_deg);
+    const double transpose_median = median_of(imu_errors_transpose_deg);
+    const bool use_transpose_convention =
+      !std::isnan(transpose_median) &&
+      (std::isnan(direct_median) || transpose_median < direct_median);
+
+    const std::vector<double> & imu_errors_deg =
+      use_transpose_convention ? imu_errors_transpose_deg : imu_errors_direct_deg;
+
+    std::vector<std::pair<Mat3, Mat3>> imu_pairs;
+    imu_pairs.reserve(imu_pairs_base.size());
+    for (const auto & pair : imu_pairs_base)
+    {
+      imu_pairs.emplace_back(
+        pair.first,
+        use_transpose_convention ? pair.second.transpose() : pair.second);
+    }
+
+    OPENMVG_LOG_INFO
+      << "IMU absolute convention auto-selected: "
+      << (use_transpose_convention ? "transpose" : "direct")
+      << " (median_direct_deg=" << direct_median
+      << ", median_transpose_deg=" << transpose_median << ")";
 
     if (!imu_errors_deg.empty())
     {
@@ -864,7 +1111,8 @@ bool GlobalSfMReconstructionEngine_RelativeMotions::Compute_Global_Translations
     matches_provider_,
     global_rotations,
     tripletWise_matches,
-    sOut_directory_);
+    sOut_directory_,
+    close_time_adaptive_filtering_);
 
   if (!sOut_directory_.empty())
   {
@@ -1103,14 +1351,63 @@ bool GlobalSfMReconstructionEngine_RelativeMotions::Adjust()
 
   // Remove outliers (max_angle, residual error)
   const size_t pointcount_initial = sfm_data_.structure.size();
-  RemoveOutliers_PixelResidualError(sfm_data_, 4.0);
+  PixelResidualAdaptiveStats pixel_adaptive_stats;
+  AngleErrorAdaptiveStats angle_adaptive_stats;
+  if (close_time_adaptive_filtering_)
+  {
+    RemoveOutliers_PixelResidualErrorAdaptive(
+      sfm_data_,
+      kDefaultPixelResidualThresholdPx,
+      kCloseTimePixelResidualThresholdPx,
+      kCloseTimeSeconds,
+      &pixel_adaptive_stats);
+  }
+  else
+  {
+    RemoveOutliers_PixelResidualError(sfm_data_, kDefaultPixelResidualThresholdPx);
+  }
   const size_t pointcount_pixelresidual_filter = sfm_data_.structure.size();
-  RemoveOutliers_AngleError(sfm_data_, 2.0);
+  if (!sOut_directory_.empty())
+  {
+    DumpStructureObservationsJson(
+      stlplus::create_filespec(sOut_directory_, "sfm_debug_structure_after_pixel_filter", "json"),
+      sfm_data_);
+  }
+  if (close_time_adaptive_filtering_)
+  {
+    RemoveOutliers_AngleErrorAdaptive(
+      sfm_data_,
+      kDefaultMinTriangulationAngleDeg,
+      kCloseTimeMinTriangulationAngleDeg,
+      kCloseTimeSeconds,
+      &angle_adaptive_stats);
+  }
+  else
+  {
+    RemoveOutliers_AngleError(sfm_data_, kDefaultMinTriangulationAngleDeg);
+  }
   const size_t pointcount_angular_filter = sfm_data_.structure.size();
+  if (!sOut_directory_.empty())
+  {
+    DumpStructureObservationsJson(
+      stlplus::create_filespec(sOut_directory_, "sfm_debug_structure_after_angle_filter", "json"),
+      sfm_data_);
+  }
   OPENMVG_LOG_INFO << "Outlier removal (remaining #points):\n"
     << "\t initial structure size #3DPoints: " << pointcount_initial << "\n"
     << "\t\t pixel residual filter  #3DPoints: " << pointcount_pixelresidual_filter << "\n"
     << "\t\t angular filter         #3DPoints: " << pointcount_angular_filter;
+  if (close_time_adaptive_filtering_)
+  {
+    OPENMVG_LOG_INFO
+      << "Close-time adaptive outlier summary:\n"
+      << "-- pixel outliers by old logic: " << pixel_adaptive_stats.old_logic_outlier_observations << "\n"
+      << "-- pixel outliers rescued by relaxed threshold: " << pixel_adaptive_stats.rescued_observations << "\n"
+      << "-- pixel outliers removed by active logic: " << pixel_adaptive_stats.removed_observations << "\n"
+      << "-- angular outlier tracks by old logic: " << angle_adaptive_stats.old_logic_outlier_tracks << "\n"
+      << "-- angular outlier tracks rescued by relaxed threshold: " << angle_adaptive_stats.rescued_tracks << "\n"
+      << "-- angular outlier tracks removed by active logic: " << angle_adaptive_stats.removed_tracks;
+  }
 
   if (!sLogging_file_.empty())
   {
@@ -1121,8 +1418,26 @@ bool GlobalSfMReconstructionEngine_RelativeMotions::Adjust()
 
   // Check that poses & intrinsic cover some measures (after outlier removal)
   const IndexT minPointPerPose = 12; // 6 min
-  const IndexT minTrackLength = 3; // 2 min
-  if (eraseUnstablePosesAndObservations(sfm_data_, minPointPerPose, minTrackLength))
+  const IndexT minTrackLengthDefault = 3; // normal
+  bool cleaned = false;
+  if (close_time_adaptive_filtering_)
+  {
+    const IndexT minTrackLengthCloseTime = minTrackLengthDefault;
+    cleaned = eraseUnstablePosesAndObservationsAdaptive(
+      sfm_data_,
+      minPointPerPose,
+      minTrackLengthDefault,
+      minTrackLengthCloseTime,
+      kCloseTimeSeconds);
+  }
+  else
+  {
+    cleaned = eraseUnstablePosesAndObservations(
+      sfm_data_,
+      minPointPerPose,
+      minTrackLengthDefault);
+  }
+  if (cleaned)
   {
     // TODO: must ensure that track graph is producing a single connected component
 
@@ -1230,18 +1545,12 @@ void GlobalSfMReconstructionEngine_RelativeMotions::Compute_Relative_Rotations
       if (pose_id == UndefinedIndexT)
         continue;
 
-      const std::string image_path =
-        stlplus::folder_append_separator(sfm_data_.s_root_path) + view_it.second->s_Img_path;
-      std::unique_ptr<openMVG::exif::Exif_IO> exifIO(
-        new openMVG::exif::Exif_IO_EasyExif(image_path));
-
-      std::string user_comment;
-      if (!exifIO->UserComment(&user_comment))
+      const sfm::ViewPriors * view_priors =
+        dynamic_cast<const sfm::ViewPriors *>(view_it.second.get());
+      if (!view_priors || !view_priors->b_has_imu_rotation_)
         continue;
 
-      Mat3 R_dw;
-      if (!ParseImuRotationFromUserComment(user_comment, R_dw))
-        continue;
+      const Mat3 & R_dw = view_priors->imu_rotation_;
 
       // R_dw: Device -> World (ENU). For landscape-left, we need:
       // R_dc_landscape = R_dc_portrait * R_landscape
@@ -1256,7 +1565,7 @@ void GlobalSfMReconstructionEngine_RelativeMotions::Compute_Relative_Rotations
         std::ostringstream os;
         os << "\n=== IMU Debug: View " << view_it.first << " (pose " << pose_id << ") ===\n";
         os << "Image: " << view_it.second->s_Img_path << "\n";
-        os << "R_dw (Device->World from EXIF, row-major):\n" << R_dw << "\n\n";
+        os << "R_dw (Device->World from sfm_data ViewPriors):\n" << R_dw << "\n\n";
         os << "R_dw columns (device axes in world coords):\n";
         os << "  Dev X in world: (" << R_dw(0,0) << ", " << R_dw(1,0) << ", " << R_dw(2,0) << ")\n";
         os << "  Dev Y in world: (" << R_dw(0,1) << ", " << R_dw(1,1) << ", " << R_dw(2,1) << ")\n";

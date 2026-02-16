@@ -8,8 +8,10 @@
 #define OPENMVG_MATCHING_IMAGE_COLLECTION_E_AC_ROBUST_IMU_HPP
 
 #include "openMVG/matching_image_collection/E_ACRobust_WithPriors.hpp"
+#include "openMVG/multiview/solver_essential_three_point.hpp"
 #include "openMVG/multiview/solver_essential_two_point_imu.hpp"
 #include "openMVG/numeric/extract_columns.hpp"
+#include <Eigen/Geometry>
 #include <map>
 #include <set>
 
@@ -107,6 +109,124 @@ private:
   Mat3 R_relative_;           // Relative rotation R = R2 · R1^T from IMU
 };
 
+/**
+ * @brief Kernel adaptor that uses IMU gravity (pitch/roll) but ignores compass yaw.
+ *
+ * Strategy:
+ * 1) Build a leveling rotation for each view from IMU up vector.
+ * 2) Rotate bearing vectors to leveled frames.
+ * 3) Estimate upright essential matrix with 3-point solver.
+ * 4) Convert E back to original camera frames.
+ */
+template <typename ErrorArg, typename ModelArg = Mat3>
+class ACKernelAdaptorEssentialImuPitchRoll
+{
+public:
+  using Solver = essential::kernel::ThreePointUprightRelativePoseSolver;
+  using Model = ModelArg;
+  using ErrorT = ErrorArg;
+
+  ACKernelAdaptorEssentialImuPitchRoll(
+    const Mat2X &x1, const Mat3X & bearing1, int w1, int h1,
+    const Mat2X &x2, const Mat3X & bearing2, int w2, int h2,
+    const Mat3 & K1, const Mat3 & K2,
+    const Mat3 & R1_wc,  // World-to-Camera rotation for view 1 (from IMU)
+    const Mat3 & R2_wc   // World-to-Camera rotation for view 2 (from IMU)
+  ):x1_(x1),
+    x2_(x2),
+    bearing1_(bearing1),
+    bearing2_(bearing2),
+    N1_(Mat3::Identity()),
+    N2_(Mat3::Identity()),
+    logalpha0_(0.0),
+    K1_(K1),
+    K2_(K2),
+    R1_level_(Mat3::Identity()),
+    R2_level_(Mat3::Identity()),
+    bearing1_level_(bearing1),
+    bearing2_level_(bearing2)
+  {
+    assert(2 == x1_.rows());
+    assert(x1_.rows() == x2_.rows());
+    assert(x1_.cols() == x2_.cols());
+
+    assert(3 == bearing1_.rows());
+    assert(bearing1_.rows() == bearing2_.rows());
+    assert(bearing1_.cols() == bearing2_.cols());
+
+    logalpha0_ = robust::ACParametrizationHelper<robust::AContrarioParametrizationType::POINT_TO_LINE>::LogAlpha0(w2, h2, 0.5);
+
+    const Vec3 up_world = Vec3::UnitZ();
+    const Vec3 up1 = (R1_wc * up_world).normalized();
+    const Vec3 up2 = (R2_wc * up_world).normalized();
+
+    // Rotate each camera frame so "up" aligns to world-up; yaw is intentionally ignored.
+    R1_level_ = Eigen::Quaterniond::FromTwoVectors(up1, up_world).toRotationMatrix();
+    R2_level_ = Eigen::Quaterniond::FromTwoVectors(up2, up_world).toRotationMatrix();
+
+    bearing1_level_ = R1_level_ * bearing1_;
+    bearing2_level_ = R2_level_ * bearing2_;
+  }
+
+  enum { MINIMUM_SAMPLES = Solver::MINIMUM_SAMPLES };  // 3
+  enum { MAX_MODELS = Solver::MAX_MODELS };            // 1
+
+  void Fit(
+    const std::vector<uint32_t> &samples,
+    std::vector<Model> *models) const
+  {
+    const auto x1 = ExtractColumns(bearing1_level_, samples);
+    const auto x2 = ExtractColumns(bearing2_level_, samples);
+
+    std::vector<Model> models_level;
+    Solver::Solve(x1, x2, &models_level);
+    models->clear();
+    models->reserve(models_level.size());
+    for (const auto & E_level : models_level)
+    {
+      // x' = R_level x  =>  E_orig = R2_level^T * E_level * R1_level
+      models->emplace_back(R2_level_.transpose() * E_level * R1_level_);
+    }
+  }
+
+  double Error(
+    uint32_t sample,
+    const Model &model) const
+  {
+    Mat3 F;
+    FundamentalFromEssential(model, K1_, K2_, &F);
+    return ErrorT::Error(F, this->x1_.col(sample), this->x2_.col(sample));
+  }
+
+  void Errors(
+    const Model & model,
+    std::vector<double> & vec_errors) const
+  {
+    Mat3 F;
+    FundamentalFromEssential(model, K1_, K2_, &F);
+    vec_errors.resize(x1_.cols());
+    for (uint32_t sample = 0; sample < x1_.cols(); ++sample)
+      vec_errors[sample] = ErrorT::Error(F, this->x1_.col(sample), this->x2_.col(sample));
+  }
+
+  size_t NumSamples() const { return x1_.cols(); }
+  void Unnormalize(Model * model) const {}
+  double logalpha0() const {return logalpha0_;}
+  double multError() const {return robust::ACParametrizationHelper<robust::AContrarioParametrizationType::POINT_TO_LINE>::MultError();}
+  Mat3 normalizer1() const {return N1_;}
+  Mat3 normalizer2() const {return N2_;}
+  double unormalizeError(double val) const { return val; }
+
+private:
+  Mat2X x1_, x2_;                   // image points
+  Mat3X bearing1_, bearing2_;       // original bearing vectors
+  Mat3 N1_, N2_;                    // normalization matrices
+  double logalpha0_;                // A Contrario parameter
+  Mat3 K1_, K2_;                    // intrinsic camera parameters
+  Mat3 R1_level_, R2_level_;        // leveling rotations from IMU up vectors
+  Mat3X bearing1_level_, bearing2_level_; // leveled bearing vectors
+};
+
 
 /**
  * @brief Geometric filter using IMU-guided 2-point essential matrix estimation
@@ -127,7 +247,10 @@ struct GeometricFilter_EMatrix_AC_Imu
     const std::map<IndexT, Mat3> * imu_rotations = nullptr,
     size_t total_expected = 0,
     size_t min_inliers = 0,
-    double dRecovery_precision = 4.0
+    double dRecovery_precision = 4.0,
+    bool reestimate_rotation_acransac = false,
+    bool imu_pitch_roll_only = false,
+    double dReestimatePrecision = -1.0
   ):
     m_dPrecision(dPrecision),
     m_stIteration(iteration),
@@ -136,6 +259,9 @@ struct GeometricFilter_EMatrix_AC_Imu
     m_imu_rotations(imu_rotations),
     m_min_inliers(min_inliers),
     m_dRecovery_precision(dRecovery_precision),
+    m_reestimate_rotation_acransac(reestimate_rotation_acransac),
+    m_imu_pitch_roll_only(imu_pitch_roll_only),
+    m_dReestimatePrecision(dReestimatePrecision),
     m_stats(std::make_shared<GeometricFilterStats>())
   {
     m_stats->total_expected = total_expected;
@@ -218,33 +344,117 @@ struct GeometricFilter_EMatrix_AC_Imu
     const Mat3X bearing_J = (*cam_J)(xJ);
     m_stats->total_features += xI.cols();
 
-    //-- 2. Setup 2-point IMU-guided RANSAC Adaptor
-    // This reduces the problem to 2-points using the relative rotation R = R2 * R1^T
-    using KernelType = ACKernelAdaptorEssentialImu<openMVG::fundamental::kernel::EpipolarDistanceError, Mat3>;
-    KernelType kernel(xI, bearing_I, view_I->ui_width, view_I->ui_height,
-                      xJ, bearing_J, view_J->ui_width, view_J->ui_height,
-                      ptrPinhole_I->K(), ptrPinhole_J->K(), R1_wc, R2_wc);
-
-    //-- 3. Robust estimation (Single pass)
+    //-- 2/3. Robust estimation
     const double upper_bound_precision = Square(m_dPrecision); // Default 32px
     std::vector<uint32_t> ransac_inliers;
     m_stats->ransac_attempted++;
-
-    const auto ACRansacOut = openMVG::robust::ACRANSAC(kernel, ransac_inliers, m_stIteration, &m_E, upper_bound_precision);
-
-    // Minimum consensus check
-    if (ransac_inliers.size() < std::max<size_t>(m_min_inliers, (size_t)(KernelType::MINIMUM_SAMPLES * 2.5)))
+    if (m_imu_pitch_roll_only)
     {
-      return false;
+      using KernelType = ACKernelAdaptorEssentialImuPitchRoll<openMVG::fundamental::kernel::EpipolarDistanceError, Mat3>;
+      KernelType kernel(xI, bearing_I, view_I->ui_width, view_I->ui_height,
+                        xJ, bearing_J, view_J->ui_width, view_J->ui_height,
+                        ptrPinhole_I->K(), ptrPinhole_J->K(), R1_wc, R2_wc);
+      const auto ACRansacOut =
+        openMVG::robust::ACRANSAC(kernel, ransac_inliers, m_stIteration, &m_E, upper_bound_precision);
+
+      if (ransac_inliers.size() < std::max<size_t>(m_min_inliers, (size_t)(KernelType::MINIMUM_SAMPLES * 2.5)))
+      {
+        return false;
+      }
+      m_dPrecision_robust = ACRansacOut.first; // This is the "Auto" precision (squared)
+    }
+    else
+    {
+      // 2-point IMU-guided RANSAC with full relative rotation (includes yaw).
+      using KernelType = ACKernelAdaptorEssentialImu<openMVG::fundamental::kernel::EpipolarDistanceError, Mat3>;
+      KernelType kernel(xI, bearing_I, view_I->ui_width, view_I->ui_height,
+                        xJ, bearing_J, view_J->ui_width, view_J->ui_height,
+                        ptrPinhole_I->K(), ptrPinhole_J->K(), R1_wc, R2_wc);
+
+      const auto ACRansacOut =
+        openMVG::robust::ACRANSAC(kernel, ransac_inliers, m_stIteration, &m_E, upper_bound_precision);
+
+      if (ransac_inliers.size() < std::max<size_t>(m_min_inliers, (size_t)(KernelType::MINIMUM_SAMPLES * 2.5)))
+      {
+        return false;
+      }
+      m_dPrecision_robust = ACRansacOut.first; // This is the "Auto" precision (squared)
     }
 
-    m_dPrecision_robust = ACRansacOut.first; // This is the "Auto" precision (squared)
-
-    //-- 4. Final selection (Apply tighter Recovery precision if requested)
-    std::vector<uint32_t> final_inlier_indices;
-    if (m_dRecovery_precision > 0.0)
+    //-- 3b. Optional re-estimation of full Essential matrix (R and t) with ACRANSAC
+    // Uses Stage-3 inliers as candidates and re-runs ACRANSAC with a 5-point solver.
+    if (m_reestimate_rotation_acransac)
     {
-      const double recovery_threshold_sq = Square(m_dRecovery_precision);
+      m_stats->reestimate_pairs_attempted++;
+      using FullKernelType =
+        openMVG::robust::ACKernelAdaptorEssential<
+          openMVG::essential::kernel::FivePointSolver,
+          openMVG::fundamental::kernel::EpipolarDistanceError,
+          Mat3>;
+
+      if (ransac_inliers.size() < FullKernelType::MINIMUM_SAMPLES)
+      {
+        return false;
+      }
+
+      const Mat2X xI_candidates = ExtractColumns(xI, ransac_inliers);
+      const Mat2X xJ_candidates = ExtractColumns(xJ, ransac_inliers);
+      const Mat3X bearing_I_candidates = ExtractColumns(bearing_I, ransac_inliers);
+      const Mat3X bearing_J_candidates = ExtractColumns(bearing_J, ransac_inliers);
+
+      FullKernelType full_kernel(
+        xI_candidates, bearing_I_candidates, view_I->ui_width, view_I->ui_height,
+        xJ_candidates, bearing_J_candidates, view_J->ui_width, view_J->ui_height,
+        ptrPinhole_I->K(), ptrPinhole_J->K());
+
+      std::vector<uint32_t> refined_local_inliers;
+      const size_t inliers_before_reestimate = ransac_inliers.size();
+      m_stats->reestimate_inliers_before_total += inliers_before_reestimate;
+      const double reestimate_upper_bound_precision =
+        Square(m_dReestimatePrecision > 0.0 ? m_dReestimatePrecision : m_dPrecision);
+      const auto refinedAcransacOut =
+        openMVG::robust::ACRANSAC(
+          full_kernel,
+          refined_local_inliers,
+          m_stIteration,
+          &m_E,
+          reestimate_upper_bound_precision);
+
+      m_stats->reestimate_inliers_after_total += refined_local_inliers.size();
+      if (refined_local_inliers.size() < inliers_before_reestimate)
+      {
+        m_stats->reestimate_pairs_reduced++;
+        m_stats->reestimate_inliers_rejected_total +=
+          (inliers_before_reestimate - refined_local_inliers.size());
+      }
+
+      if (refined_local_inliers.size() < std::max<size_t>(m_min_inliers, (size_t)(FullKernelType::MINIMUM_SAMPLES * 2.5)))
+      {
+        m_stats->reestimate_pairs_rejected++;
+        return false;
+      }
+
+      std::vector<uint32_t> refined_global_inliers;
+      refined_global_inliers.reserve(refined_local_inliers.size());
+      for (const uint32_t local_idx : refined_local_inliers)
+      {
+        refined_global_inliers.push_back(ransac_inliers[local_idx]);
+      }
+      ransac_inliers.swap(refined_global_inliers);
+      m_dPrecision_robust = refinedAcransacOut.first;
+    }
+
+    //-- 4. Final selection (Recovery filtering)
+    //  - m_dRecovery_precision > 0: use fixed pixel threshold (user provided).
+    //  - m_dRecovery_precision == 0: use ACRANSAC auto precision (same spirit as -g e).
+    //  - m_dRecovery_precision < 0: disable recovery filtering.
+    std::vector<uint32_t> final_inlier_indices;
+    if (m_dRecovery_precision >= 0.0)
+    {
+      const double recovery_threshold_sq =
+        (m_dRecovery_precision > 0.0)
+          ? Square(m_dRecovery_precision)
+          : m_dPrecision_robust;
       Mat3 F;
       FundamentalFromEssential(m_E, ptrPinhole_I->K(), ptrPinhole_J->K(), &F);
 
@@ -264,7 +474,7 @@ struct GeometricFilter_EMatrix_AC_Imu
     }
     else
     {
-      // "Auto" mode: use RANSAC inliers directly
+      // Recovery filtering disabled: keep RANSAC inliers directly.
       final_inlier_indices = std::move(ransac_inliers);
     }
 
@@ -347,6 +557,9 @@ struct GeometricFilter_EMatrix_AC_Imu
   const std::map<IndexT, Mat3> * m_imu_rotations;
   size_t m_min_inliers;
   double m_dRecovery_precision;
+  bool m_reestimate_rotation_acransac;
+  bool m_imu_pitch_roll_only;
+  double m_dReestimatePrecision;
   std::shared_ptr<GeometricFilterStats> m_stats;
 };
 

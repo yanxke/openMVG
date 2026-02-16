@@ -377,20 +377,6 @@ int main( int argc, char** argv )
   // -- export Putative View Graph statistics
   graph::getGraphStatistics(sfm_data.GetViews().size(), getPairs(map_PutativeMatches));
 
-  //-- export putative matches Adjacency matrix
-  const std::string sPutativeAdjacencyMatrix =
-    stlplus::create_filespec( sMatchesDirectory, "PutativeAdjacencyMatrix", "svg" );
-  if (stlplus::file_exists(sPutativeAdjacencyMatrix))
-  {
-    OPENMVG_LOG_INFO << "Putative adjacency matrix already exists, skipping: "
-                     << sPutativeAdjacencyMatrix;
-  }
-  else
-  {
-    PairWiseMatchingToAdjacencyMatrixSVG( vec_fileNames.size(),
-                                          map_PutativeMatches,
-                                          sPutativeAdjacencyMatrix );
-  }
   //-- export view pair graph once putative graph matches has been computed
   {
     std::set<IndexT> set_ViewIds;

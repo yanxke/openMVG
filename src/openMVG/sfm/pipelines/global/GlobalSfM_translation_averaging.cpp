@@ -39,6 +39,9 @@
 
 #include <fstream>
 #include <iomanip>
+#include <cmath>
+#include <atomic>
+#include <set>
 #include <vector>
 
 namespace openMVG{
@@ -47,6 +50,75 @@ namespace sfm{
 using namespace openMVG::cameras;
 using namespace openMVG::geometry;
 using namespace openMVG::matching;
+
+namespace {
+
+constexpr double kCloseTimeSeconds = 0.75;
+constexpr size_t kLegacyMinTripletTrackCount = 30;
+constexpr size_t kCloseTimeRelaxedMinTripletTrackCount = 10;
+constexpr double kLegacyInlierSupportRatio = 0.33;
+constexpr double kCloseTimeInlierSupportRatio = 0.2;
+
+// NOTE: Historical expression had a bug::
+//   (vec_inliers.size() > 30 && 0.33 * tracks.size())
+// where the second term is used as a truthy value.
+bool PassLegacyTripletAcceptance(const size_t inlier_count, const size_t track_count)
+{
+  return (inlier_count > kLegacyMinTripletTrackCount &&
+    inlier_count >= static_cast<size_t>(kLegacyInlierSupportRatio * static_cast<double>(track_count)));
+}
+
+bool PassCloseTimeRelaxedAcceptance(
+  const bool has_close_time_pair,
+  const size_t inlier_count,
+  const size_t track_count)
+{
+  return has_close_time_pair &&
+         inlier_count >= kCloseTimeRelaxedMinTripletTrackCount &&
+         static_cast<double>(inlier_count) >=
+           kCloseTimeInlierSupportRatio * static_cast<double>(track_count);
+}
+
+bool AreViewsCloseInTime(
+  const View * view_a,
+  const View * view_b,
+  const double close_time_seconds)
+{
+  if (!view_a || !view_b ||
+      !view_a->b_has_capture_time_epoch_ || !view_b->b_has_capture_time_epoch_)
+  {
+    return false;
+  }
+  return std::abs(view_a->capture_time_epoch_ - view_b->capture_time_epoch_) < close_time_seconds;
+}
+
+bool ArePosesCloseInTime(
+  const IndexT pose_a,
+  const IndexT pose_b,
+  const Hash_Map<IndexT, std::vector<double>> & pose_capture_times,
+  const double close_time_seconds)
+{
+  const auto it_a = pose_capture_times.find(pose_a);
+  const auto it_b = pose_capture_times.find(pose_b);
+  if (it_a == pose_capture_times.end() || it_b == pose_capture_times.end())
+  {
+    return false;
+  }
+
+  for (const double t_a : it_a->second)
+  {
+    for (const double t_b : it_b->second)
+    {
+      if (std::abs(t_a - t_b) < close_time_seconds)
+      {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+} // namespace
 
 void DumpCandidateTripletsJson(
   const std::string & path,
@@ -87,10 +159,12 @@ bool GlobalSfM_Translation_AveragingSolver::Run
   const openMVG::sfm::Matches_Provider * matches_provider,
   const Hash_Map<IndexT, Mat3> & map_globalR,
   matching::PairWiseMatches & tripletWise_matches,
-  const std::string & output_dir
+  const std::string & output_dir,
+  bool close_time_adaptive_filtering
 )
 {
   output_dir_ = output_dir;
+  close_time_adaptive_filtering_ = close_time_adaptive_filtering;
 
   // Compute the relative translations and save them to vec_initialRijTijEstimates:
   Compute_translations(
@@ -473,6 +547,11 @@ void GlobalSfM_Translation_AveragingSolver::ComputePutativeTranslation_EdgesCove
   }
 
   {
+    std::atomic<size_t> triplet_attempt_count(0);
+    std::atomic<size_t> triplet_accepted_by_legacy_count(0);
+    std::atomic<size_t> triplet_rescued_by_close_time_count(0);
+    std::set<Pair> rescued_pairs;
+
     // Compute triplets of translations
     // Avoid to cover each edge of the graph by using an edge coverage algorithm
     // An estimated triplets of translation mark three edges as estimated.
@@ -518,6 +597,19 @@ void GlobalSfM_Translation_AveragingSolver::ComputePutativeTranslation_EdgesCove
                    map_tripletIds_perEdge.cend(),
                    std::back_inserter(vec_edges),
                    stl::RetrieveKey());
+
+    Hash_Map<IndexT, std::vector<double>> pose_capture_times;
+    if (close_time_adaptive_filtering_)
+    {
+      for (const auto & view_it : sfm_data.GetViews())
+      {
+        const View * view = view_it.second.get();
+        if (view && view->b_has_capture_time_epoch_)
+        {
+          pose_capture_times[view->id_pose].push_back(view->capture_time_epoch_);
+        }
+      }
+    }
 
     openMVG::sfm::MutexSet<myEdge> m_mutexSet;
 
@@ -567,8 +659,11 @@ void GlobalSfM_Translation_AveragingSolver::ComputePutativeTranslation_EdgesCove
           vec_triplet_ordered[i] = vec_possibleTripletIndexes[packet_vec[i].index];
         }
 
-        // Try to solve a triplet of translations for the given edge
-        for (const uint32_t triplet_index : vec_triplet_ordered)
+        const bool edge_is_close_time =
+          close_time_adaptive_filtering_ &&
+          ArePosesCloseInTime(edge.first, edge.second, pose_capture_times, kCloseTimeSeconds);
+
+        auto try_estimate_triplet = [&](const uint32_t triplet_index, const bool allow_close_time_relaxed)
         {
           const graph::Triplet & triplet = vec_triplets[triplet_index];
 
@@ -577,19 +672,17 @@ void GlobalSfM_Translation_AveragingSolver::ComputePutativeTranslation_EdgesCove
               m_mutexSet.count({triplet.i, triplet.k}) &&
               m_mutexSet.count({triplet.j, triplet.k}))
           {
-            continue;
+            return false;
           }
 
-          //--
-          // Try to estimate this triplet of translations
-          //--
           double dPrecision = 4.0; // upper bound of the residual pixel reprojection error
-
           std::vector<Vec3> vec_tis(3);
           std::vector<uint32_t> vec_inliers;
           openMVG::tracks::STLMAPTracks pose_triplet_tracks;
-
           const std::string sOutDirectory = "./";
+          bool accepted_by_legacy = false;
+          bool accepted_by_close_time_only = false;
+          ++triplet_attempt_count;
 
           const bool bTriplet_estimation = Estimate_T_triplet(
               sfm_data,
@@ -601,95 +694,137 @@ void GlobalSfM_Translation_AveragingSolver::ComputePutativeTranslation_EdgesCove
               dPrecision,
               vec_inliers,
               pose_triplet_tracks,
-              sOutDirectory);
+              sOutDirectory,
+              allow_close_time_relaxed,
+              &accepted_by_legacy,
+              &accepted_by_close_time_only);
 
-          if (bTriplet_estimation)
+          if (!bTriplet_estimation)
           {
-            // Since new translation edges have been computed, mark their corresponding edges as estimated
+            return false;
+          }
+
+          if (accepted_by_legacy)
+          {
+            ++triplet_accepted_by_legacy_count;
+          }
+          if (accepted_by_close_time_only)
+          {
+            ++triplet_rescued_by_close_time_count;
+          }
+
+          // Since new translation edges have been computed, mark their corresponding edges as estimated.
+          #ifdef OPENMVG_USE_OPENMP
+            #pragma omp critical
+          #endif
+          {
+            m_mutexSet.insert({triplet.i, triplet.j});
+            m_mutexSet.insert({triplet.j, triplet.k});
+            m_mutexSet.insert({triplet.i, triplet.k});
+            if (accepted_by_close_time_only)
+            {
+              rescued_pairs.insert(Pair(std::min(triplet.i, triplet.j), std::max(triplet.i, triplet.j)));
+              rescued_pairs.insert(Pair(std::min(triplet.i, triplet.k), std::max(triplet.i, triplet.k)));
+              rescued_pairs.insert(Pair(std::min(triplet.j, triplet.k), std::max(triplet.j, triplet.k)));
+            }
+          }
+
+          // Compute the triplet relative motions (IJ, JK, IK).
+          {
+            const Mat3
+              RI = map_globalR.at(triplet.i),
+              RJ = map_globalR.at(triplet.j),
+              RK = map_globalR.at(triplet.k);
+            const Vec3
+              ti = vec_tis[0],
+              tj = vec_tis[1],
+              tk = vec_tis[2];
+
+            Mat3 Rij;
+            Vec3 tij;
+            RelativeCameraMotion(RI, ti, RJ, tj, &Rij, &tij);
+
+            Mat3 Rjk;
+            Vec3 tjk;
+            RelativeCameraMotion(RJ, tj, RK, tk, &Rjk, &tjk);
+
+            Mat3 Rik;
+            Vec3 tik;
+            RelativeCameraMotion(RI, ti, RK, tk, &Rik, &tik);
+
+            #ifdef OPENMVG_USE_OPENMP
+              const int thread_id = omp_get_thread_num();
+            #else
+              const int thread_id = 0;
+            #endif
+
+            // Safety check to prevent out-of-bounds access.
+            if (thread_id >= static_cast<int>(initial_estimates.size()))
+            {
+              OPENMVG_LOG_ERROR << "Thread ID " << thread_id
+                                << " exceeds initial_estimates size " << initial_estimates.size();
+              return false;
+            }
+
+            RelativeInfo_Vec triplet_relative_motion;
+            triplet_relative_motion.push_back(
+              {{triplet.i, triplet.j}, {Rij, tij}});
+            triplet_relative_motion.push_back(
+              {{triplet.j, triplet.k}, {Rjk, tjk}});
+            triplet_relative_motion.push_back(
+              {{triplet.i, triplet.k}, {Rik, tik}});
+
+            initial_estimates[thread_id].emplace_back(triplet_relative_motion);
+
             #ifdef OPENMVG_USE_OPENMP
               #pragma omp critical
             #endif
             {
-              m_mutexSet.insert({triplet.i, triplet.j});
-              m_mutexSet.insert({triplet.j, triplet.k});
-              m_mutexSet.insert({triplet.i, triplet.k});
-            }
-
-            // Compute the triplet relative motions (IJ, JK, IK)
-            {
-              const Mat3
-                RI = map_globalR.at(triplet.i),
-                RJ = map_globalR.at(triplet.j),
-                RK = map_globalR.at(triplet.k);
-              const Vec3
-                ti = vec_tis[0],
-                tj = vec_tis[1],
-                tk = vec_tis[2];
-
-              Mat3 Rij;
-              Vec3 tij;
-              RelativeCameraMotion(RI, ti, RJ, tj, &Rij, &tij);
-
-              Mat3 Rjk;
-              Vec3 tjk;
-              RelativeCameraMotion(RJ, tj, RK, tk, &Rjk, &tjk);
-
-              Mat3 Rik;
-              Vec3 tik;
-              RelativeCameraMotion(RI, ti, RK, tk, &Rik, &tik);
-
-              #ifdef OPENMVG_USE_OPENMP
-                const int thread_id = omp_get_thread_num();
-              #else
-                const int thread_id = 0;
-              #endif
-
-              // Safety check to prevent out-of-bounds access
-              if (thread_id >= static_cast<int>(initial_estimates.size()))
+              // Add inliers as valid pairwise matches.
+              for (const uint32_t & inlier_it : vec_inliers)
               {
-                OPENMVG_LOG_ERROR << "Thread ID " << thread_id
-                                  << " exceeds initial_estimates size " << initial_estimates.size();
-                continue;
-              }
+                tracks::STLMAPTracks::const_iterator it_tracks = pose_triplet_tracks.begin();
+                std::advance(it_tracks, inlier_it);
+                const tracks::submapTrack & track = it_tracks->second;
 
-              RelativeInfo_Vec triplet_relative_motion;
-              triplet_relative_motion.push_back(
-                {{triplet.i, triplet.j}, {Rij, tij}});
-              triplet_relative_motion.push_back(
-                {{triplet.j, triplet.k}, {Rjk, tjk}});
-              triplet_relative_motion.push_back(
-                {{triplet.i, triplet.k}, {Rik, tik}});
-
-              initial_estimates[thread_id].emplace_back(triplet_relative_motion);
-
-              #ifdef OPENMVG_USE_OPENMP
-                #pragma omp critical
-              #endif
-              {
-                // Add inliers as valid pairwise matches
-                for (const uint32_t & inlier_it : vec_inliers)
+                // Create pairwise matches from the inlier track.
+                tracks::submapTrack::const_iterator iter_I = track.begin();
+                tracks::submapTrack::const_iterator iter_J = track.begin();
+                std::advance(iter_J, 1);
+                while (iter_J != track.end())
                 {
-                  tracks::STLMAPTracks::const_iterator it_tracks = pose_triplet_tracks.begin();
-                  std::advance(it_tracks, inlier_it);
-                  const tracks::submapTrack & track = it_tracks->second;
-
-                  // create pairwise matches from the inlier track
-                  tracks::submapTrack::const_iterator iter_I = track.begin();
-                  tracks::submapTrack::const_iterator iter_J = track.begin();
-                  std::advance(iter_J, 1);
-                  while (iter_J != track.end())
-                  { // matches(pair(view_id(I), view_id(J))) <= IndMatch(feat_id(I), feat_id(J))
-                    newpairMatches[{iter_I->first, iter_J->first}]
-                     .emplace_back(iter_I->second, iter_J->second);
-                    ++iter_I;
-                    ++iter_J;
-                  }
+                  newpairMatches[{iter_I->first, iter_J->first}]
+                   .emplace_back(iter_I->second, iter_J->second);
+                  ++iter_I;
+                  ++iter_J;
                 }
               }
             }
-            // Since a relative translation have been found for the edge: vec_edges[k],
-            //  we break and start to estimate the translations for some other edges.
+          }
+          return true;
+        };
+
+        bool edge_estimated = false;
+        // Pass 1: legacy-only behavior.
+        for (const uint32_t triplet_index : vec_triplet_ordered)
+        {
+          if (try_estimate_triplet(triplet_index, false))
+          {
+            edge_estimated = true;
             break;
+          }
+        }
+
+        // Pass 2: close-time relaxed behavior, only when no legacy triplet was selected for this edge.
+        if (!edge_estimated && edge_is_close_time)
+        {
+          for (const uint32_t triplet_index : vec_triplet_ordered)
+          {
+            if (try_estimate_triplet(triplet_index, true))
+            {
+              edge_estimated = true;
+              break;
+            }
           }
         }
       }
@@ -700,16 +835,26 @@ void GlobalSfM_Translation_AveragingSolver::ComputePutativeTranslation_EdgesCove
       vec_triplet_relative_motion.insert( vec_triplet_relative_motion.end(),
         std::make_move_iterator(vec.begin()), std::make_move_iterator(vec.end()));
     }
-  }
 
-  const double timeLP_triplet = timerLP_triplet.elapsed();
-  OPENMVG_LOG_INFO << "TRIPLET COVERAGE TIMING:\n"
-    << "-------------------------------" << "\n"
-    << "-- #Relative triplet of translations estimates: " << vec_triplet_relative_motion.size()
-    << " computed from " << vec_triplets.size() << " triplets.\n"
-    << "-- resulting in " << vec_triplet_relative_motion.size()*3 << " translations estimation.\n"
-    << "-- time to compute triplets of relative translations: " << timeLP_triplet << " seconds.\n"
-    << "-------------------------------";
+    const double timeLP_triplet = timerLP_triplet.elapsed();
+    OPENMVG_LOG_INFO << "TRIPLET COVERAGE TIMING:\n"
+      << "-------------------------------" << "\n"
+      << "-- #Relative triplet of translations estimates: " << vec_triplet_relative_motion.size()
+      << " computed from " << vec_triplets.size() << " triplets.\n"
+      << "-- resulting in " << vec_triplet_relative_motion.size()*3 << " translations estimation.\n"
+      << "-- time to compute triplets of relative translations: " << timeLP_triplet << " seconds.\n"
+      << "-------------------------------";
+
+    if (close_time_adaptive_filtering_)
+    {
+      OPENMVG_LOG_INFO
+        << "Close-time adaptive filtering summary:\n"
+        << "-- triplet attempts: " << triplet_attempt_count.load() << "\n"
+        << "-- accepted by legacy logic: " << triplet_accepted_by_legacy_count.load() << "\n"
+        << "-- rescued by close-time logic: " << triplet_rescued_by_close_time_count.load() << "\n"
+        << "-- unique pair-edges rescued by close-time logic: " << rescued_pairs.size();
+    }
+  }
 }
 
 // Robust estimation and refinement of a triplet of translations
@@ -724,12 +869,25 @@ bool GlobalSfM_Translation_AveragingSolver::Estimate_T_triplet
   double & dPrecision, // UpperBound of the precision found by the AContrario estimator
   std::vector<uint32_t> & vec_inliers,
   openMVG::tracks::STLMAPTracks & tracks,
-  const std::string & sOutDirectory
+  const std::string & sOutDirectory,
+  bool allow_close_time_relaxed,
+  bool * accepted_by_legacy,
+  bool * accepted_by_close_time_only
 ) const
 {
+  if (accepted_by_legacy)
+  {
+    *accepted_by_legacy = false;
+  }
+  if (accepted_by_close_time_only)
+  {
+    *accepted_by_close_time_only = false;
+  }
+
   // List matches that belong to the triplet of poses
   PairWiseMatches map_triplet_matches;
   const std::set<IndexT> set_pose_ids {poses_id.i, poses_id.j, poses_id.k};
+  bool has_close_time_pair = false;
   // List shared correspondences (pairs) between poses
   for (const auto & match_iterator : matches_provider->pairWise_matches_)
   {
@@ -741,6 +899,12 @@ bool GlobalSfM_Translation_AveragingSolver::Estimate_T_triplet
         && set_pose_ids.count(v1->id_pose)
         && set_pose_ids.count(v2->id_pose))
     {
+      if (allow_close_time_relaxed && close_time_adaptive_filtering_)
+      {
+        has_close_time_pair =
+          has_close_time_pair ||
+          AreViewsCloseInTime(v1, v2, kCloseTimeSeconds);
+      }
       map_triplet_matches.insert( match_iterator );
     }
   }
@@ -750,7 +914,11 @@ bool GlobalSfM_Translation_AveragingSolver::Estimate_T_triplet
   tracksBuilder.Filter(3);
   tracksBuilder.ExportToSTL(tracks);
 
-  if (tracks.size() < 30)
+  const size_t min_triplet_track_count =
+    (allow_close_time_relaxed && has_close_time_pair)
+      ? kCloseTimeRelaxedMinTripletTrackCount
+      : kLegacyMinTripletTrackCount;
+  if (tracks.size() < min_triplet_track_count)
     return false;
 
   // Data conversion
@@ -908,12 +1076,38 @@ bool GlobalSfM_Translation_AveragingSolver::Estimate_T_triplet
 
 #endif
 
-  // Keep the model iff it has a sufficient inlier count
-  const bool bTest = ( vec_inliers.size() > 30 && 0.33 * tracks.size() );
+  // Keep the model if either:
+  // 1) legacy acceptance passes, or
+  // 2) close-time relaxed acceptance passes.
+  const bool pass_legacy_logic =
+    PassLegacyTripletAcceptance(vec_inliers.size(), tracks.size());
+  const bool pass_close_time_logic =
+    allow_close_time_relaxed &&
+    close_time_adaptive_filtering_ &&
+    PassCloseTimeRelaxedAcceptance(has_close_time_pair, vec_inliers.size(), tracks.size());
+  bool bTest = false;
+  if (pass_legacy_logic)
+  {
+    bTest = true;
+    if (accepted_by_legacy)
+    {
+      *accepted_by_legacy = true;
+    }
+  }
+  else if (pass_close_time_logic)
+  {
+    bTest = true;
+    if (accepted_by_close_time_only)
+    {
+      *accepted_by_close_time_only = true;
+    }
+  }
 
 #ifdef DEBUG_TRIPLET
   {
     OPENMVG_LOG_INFO << "Triplet : status: " << bTest
+      << " [legacy=" << pass_legacy_logic
+      << ", close_time_relaxed=" << pass_close_time_logic << "]"
       << " AC: " << std::sqrt(dPrecision)
       << " inliers % " << double(vec_inliers.size()) / tracks.size() * 100.0
       << " total putative " << tracks.size();

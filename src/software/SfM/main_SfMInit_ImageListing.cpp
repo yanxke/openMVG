@@ -24,6 +24,9 @@
 #include "third_party/stlplus3/filesystemSimplified/file_system.hpp"
 
 #include <fstream>
+#include <cmath>
+#include <cstdio>
+#include <ctime>
 #include <memory>
 #include <sstream>
 #include <string>
@@ -143,6 +146,56 @@ bool ParseXmpStepCounter(const std::string & filename, int & step_counter)
   {
     return false;
   }
+}
+
+bool ParseExifCaptureTime(
+  const std::string & filename,
+  std::string & capture_time,
+  double & capture_time_epoch)
+{
+  capture_time_epoch = 0.0;
+  std::unique_ptr<Exif_IO> exifReader(new Exif_IO_EasyExif);
+  if (!exifReader->open(filename))
+  {
+    return false;
+  }
+
+  if (!exifReader->DateTime(&capture_time))
+  {
+    return false;
+  }
+
+  std::string capture_time_subsec;
+  if (exifReader->SubSecTime(&capture_time_subsec))
+  {
+    capture_time += "." + capture_time_subsec;
+  }
+
+  int year = 0, month = 0, day = 0, hour = 0, minute = 0;
+  double second = 0.0;
+  if (std::sscanf(capture_time.c_str(), "%d:%d:%d %d:%d:%lf",
+                  &year, &month, &day, &hour, &minute, &second) != 6)
+  {
+    return false;
+  }
+
+  double second_integer = 0.0;
+  const double second_fraction = std::modf(second, &second_integer);
+  std::tm tm_val = {};
+  tm_val.tm_year = year - 1900;
+  tm_val.tm_mon = month - 1;
+  tm_val.tm_mday = day;
+  tm_val.tm_hour = hour;
+  tm_val.tm_min = minute;
+  tm_val.tm_sec = static_cast<int>(second_integer);
+  tm_val.tm_isdst = -1;
+  const std::time_t t = std::mktime(&tm_val);
+  if (t == static_cast<std::time_t>(-1))
+  {
+    return false;
+  }
+  capture_time_epoch = static_cast<double>(t) + second_fraction;
+  return true;
 }
 
 /// Check that Kmatrix is a string like "f;0;ppx;0;f;ppy;0;0;1"
@@ -625,6 +678,10 @@ int main(int argc, char **argv)
     }
 
     // Build the view corresponding to the image
+    std::string capture_time;
+    double capture_time_epoch = 0.0;
+    const bool has_capture_time = ParseExifCaptureTime(sImageFilename, capture_time, capture_time_epoch);
+
     Vec3 pose_center;
     if (getGPS(sImageFilename, i_GPS_XYZ_method, pose_center) && b_Use_pose_prior)
     {
@@ -681,6 +738,14 @@ int main(int argc, char **argv)
       {
         v.b_has_step_counter_ = true;
         v.step_counter_ = step_counter;
+      }
+
+      if (has_capture_time)
+      {
+        v.b_has_capture_time_ = true;
+        v.capture_time_ = capture_time;
+        v.b_has_capture_time_epoch_ = true;
+        v.capture_time_epoch_ = capture_time_epoch;
       }
 
       // Add the view to the sfm_container
@@ -754,6 +819,14 @@ int main(int argc, char **argv)
           v.step_counter_ = step_counter;
         }
 
+        if (has_capture_time)
+        {
+          v.b_has_capture_time_ = true;
+          v.capture_time_ = capture_time;
+          v.b_has_capture_time_epoch_ = true;
+          v.capture_time_epoch_ = capture_time_epoch;
+        }
+
         // Add the view to the sfm_container
         views[v.id_view] = std::make_shared<ViewPriors>(v);
       }
@@ -773,6 +846,14 @@ int main(int argc, char **argv)
         {
           // Add the defined intrinsic to the sfm_container
           intrinsics[v.id_intrinsic] = intrinsic;
+        }
+
+        if (has_capture_time)
+        {
+          v.b_has_capture_time_ = true;
+          v.capture_time_ = capture_time;
+          v.b_has_capture_time_epoch_ = true;
+          v.capture_time_epoch_ = capture_time_epoch;
         }
 
         // Add the view to the sfm_container
