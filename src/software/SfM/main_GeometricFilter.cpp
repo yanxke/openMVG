@@ -392,7 +392,7 @@ int main( int argc, char** argv )
   }
 
   // Show the progress on the command line:
-  system::LoggerProgress progress(1, {}, 1);
+  system::LoggerProgress progress(1, {}, 5);
 
   if ( !regions_provider->load( sfm_data, sMatchesDirectory, regions_type, &progress ) )
   {
@@ -409,6 +409,7 @@ int main( int argc, char** argv )
     OPENMVG_LOG_ERROR << "Failed to load the initial matches file.";
     return EXIT_FAILURE;
   }
+  OPENMVG_LOG_INFO << "Loaded " << map_PutativeMatches.size() << " putative matching pairs.";
 
   if ( !sInputPairsFilename.empty() )
   {
@@ -418,8 +419,8 @@ int main( int argc, char** argv )
     loadPairs( sfm_data.GetViews().size(), sInputPairsFilename, input_pairs );
 
     // Filter matches with the given pairs
-    OPENMVG_LOG_INFO << "Filtering matches with the given pairs.";
     map_PutativeMatches = getPairs( map_PutativeMatches, input_pairs );
+    OPENMVG_LOG_INFO << "Number of putative pairs after input-pair filtering: " << map_PutativeMatches.size();
   }
 
   //---------------------------------------
