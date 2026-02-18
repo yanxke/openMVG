@@ -55,6 +55,16 @@ parser.add_argument("--use_plain_geometric_filter", action="store_true",
                     help="Use openMVG_main_GeometricFilter with -g e (no priors), instead of openMVG_main_GeometricFilterWithPriors -g i.")
 parser.add_argument("--excluded_pairs_file", type=str, default="",
                     help="Optional JSON file of excluded image pairs. If not set, uses matches/excluded_pairs.json when present.")
+parser.add_argument("--disable_auto_exclusions", action="store_true",
+                    help="Disable automatic excluded-pair generation before Global SfM.")
+parser.add_argument("--auto_excl_min_time_delta", type=float, default=30.0,
+                    help="Min timestamp delta (seconds) for auto exclusions.")
+parser.add_argument("--auto_excl_max_homography_error", type=float, default=5.0,
+                    help="Max 95th-percentile homography reprojection error (px) for auto exclusions.")
+parser.add_argument("--auto_excl_min_imu_rotation_error", type=float, default=90.0,
+                    help="Min IMU-vs-geometric relative-rotation error (deg) for auto exclusions.")
+parser.add_argument("--auto_excl_max_bbox_area_ratio", type=float, default=0.10,
+                    help="Max per-image bbox area ratio for auto exclusions.")
 parser.add_argument("input_dir", help="Input directory containing the images.")
 parser.add_argument("output_dir", help="Output directory where the project files will be saved.")
 
@@ -215,6 +225,19 @@ with open(log_path, "a") as log_file:
   if not os.path.exists(reconstruction_dir):
     os.mkdir(reconstruction_dir)
 
+  if args.disable_auto_exclusions:
+    print ("6. Generate auto exclusions (skipped, disabled by flag)")
+    log_file.write("== 6. Generate auto exclusions (skipped, disabled by flag) ==\n")
+  else:
+    run_step("6. Generate auto exclusions",
+             [os.path.join(OPENMVG_SFM_BIN, "openMVG_main_GenAutoExclusions"),
+              "-i", matches_dir,
+              "-t", str(args.auto_excl_min_time_delta),
+              "-e", str(args.auto_excl_max_homography_error),
+              "-r", str(args.auto_excl_min_imu_rotation_error),
+              "-b", str(args.auto_excl_max_bbox_area_ratio)],
+             log_file)
+
   excluded_pairs_file = args.excluded_pairs_file
   if not excluded_pairs_file:
     default_exclusions = os.path.join(matches_dir, "excluded_pairs.json")
@@ -245,7 +268,7 @@ with open(log_path, "a") as log_file:
   if excluded_pairs_file:
     sfm_cmd.extend(["--excluded_pairs_file", excluded_pairs_file])
 
-  run_step("6. Do Global reconstruction", sfm_cmd, log_file)
+  run_step("7. Do Global reconstruction", sfm_cmd, log_file)
 
   # run_step("7. Colorize Structure",
   #          [os.path.join(OPENMVG_SFM_BIN, "openMVG_main_ComputeSfM_DataColor"), "-i", reconstruction_dir+"/sfm_data.bin", "-o", os.path.join(reconstruction_dir,"colorized.ply")],
