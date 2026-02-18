@@ -55,7 +55,7 @@ namespace {
 
 constexpr double kCloseTimeSeconds = 0.75;
 constexpr size_t kLegacyMinTripletTrackCount = 30;
-constexpr size_t kCloseTimeRelaxedMinTripletTrackCount = 10;
+constexpr size_t kCloseTimeRelaxedMinTripletTrackCount = 5;
 constexpr double kLegacyInlierSupportRatio = 0.33;
 constexpr double kCloseTimeInlierSupportRatio = 0.2;
 
