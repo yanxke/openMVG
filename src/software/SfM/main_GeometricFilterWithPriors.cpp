@@ -820,10 +820,13 @@ int main( int argc, char** argv )
     // re-running expensive robust estimation.
     if (eGeometricModelToCompute == ESSENTIAL_MATRIX ||
         eGeometricModelToCompute == ESSENTIAL_MATRIX_IMU ||
-        eGeometricModelToCompute == ESSENTIAL_MATRIX_IMU_PITCHROLL)
+        eGeometricModelToCompute == ESSENTIAL_MATRIX_IMU_PITCHROLL ||
+        eGeometricModelToCompute == ESSENTIAL_MATRIX_UPRIGHT ||
+        eGeometricModelToCompute == ESSENTIAL_MATRIX_ANGULAR)
     {
       SavePairRotationsJson(map_GeometricMatches, sfm_data, regions_provider, sFilteredMatchesFilename);
     }
+
 
     // -- export Geometric View Graph statistics
     graph::getGraphStatistics(sfm_data.GetViews().size(), getPairs(map_GeometricMatches));

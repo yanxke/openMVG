@@ -170,6 +170,17 @@ target_link_libraries(openMVG_main_GenAutoExclusions
     ${STLPLUS_LIBRARY}
 )
 
+add_executable(openMVG_main_MergeGeometricMatches main_MergeGeometricMatches.cpp)
+target_link_libraries(openMVG_main_MergeGeometricMatches
+  PRIVATE
+    openMVG_features
+    openMVG_matching
+    openMVG_system
+    ${STLPLUS_LIBRARY}
+)
+
+
+
 # add_executable(openMVG_main_MatchesToTracks main_MatchesToTracks.cpp)
 # target_link_libraries(openMVG_main_MatchesToTracks
 #   PRIVATE
@@ -190,6 +201,7 @@ set_property( TARGET openMVG_main_GeometricFilter   PROPERTY FOLDER OpenMVG/soft
 # set_property( TARGET openMVG_main_GeometricFilterByPriors PROPERTY FOLDER OpenMVG/software )
 set_property( TARGET openMVG_main_GeometricFilterWithPriors PROPERTY FOLDER OpenMVG/software )
 set_property( TARGET openMVG_main_GenAutoExclusions PROPERTY FOLDER OpenMVG/software )
+set_property( TARGET openMVG_main_MergeGeometricMatches PROPERTY FOLDER OpenMVG/software )
 # set_property( TARGET openMVG_main_MatchesToTracks   PROPERTY FOLDER OpenMVG/software )
 
 # install( TARGETS openMVG_main_ListMatchingPairs DESTINATION bin/ )
@@ -201,6 +213,8 @@ install( TARGETS openMVG_main_GeometricFilter   DESTINATION bin/ )
 # install( TARGETS openMVG_main_GeometricFilterByPriors DESTINATION bin/ )
 install( TARGETS openMVG_main_GeometricFilterWithPriors DESTINATION bin/ )
 install( TARGETS openMVG_main_GenAutoExclusions DESTINATION bin/ )
+install( TARGETS openMVG_main_MergeGeometricMatches DESTINATION bin/ )
+
 # install( TARGETS openMVG_main_MatchesToTracks   DESTINATION bin/ )
 
 ###

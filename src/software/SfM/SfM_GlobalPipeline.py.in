@@ -44,8 +44,12 @@ parser.add_argument("--disable_reestimate_rotation", action="store_true",
                     help="Disable IMU geometric-filter rotation re-estimation pass.")
 parser.add_argument("--imu_reestimate_prec", type=float, default=15.0,
                     help="Pixel threshold for IMU re-estimation pass (-Q).")
+parser.add_argument("--disable_dual_geometric_filter", action="store_true",
+                    help="Disable dual geometric filtering (standard + upright) and use standard only.")
+
 parser.add_argument("--imu_pitch_roll_only", action="store_true",
                     help="Use IMU pitch/roll only (ignore compass yaw) during IMU geometric filtering.")
+
 parser.add_argument("--enable_close_time_adaptive_filtering", dest="close_time_adaptive_filtering", action="store_true",
                     help="Enable close-time adaptive filtering in global SfM (disabled by default).")
 parser.add_argument("-gp", "--geofilt_prec", type=float, default=0.0, help="Geometric filter precision (max pixel error). Use 0.0 for Auto (found by RANSAC math).")
@@ -158,68 +162,80 @@ with open(log_path, "a") as log_file:
            [os.path.join(OPENMVG_SFM_BIN, "openMVG_main_ComputeMatches"), "-i", matches_dir+"/sfm_data.json", "-p", matches_dir+ "/pairs.bin", "-o", matches_dir + "/matches.putative.bin", "-r", str(args.ratio)],
            log_file)
 
-  if args.use_plain_geometric_filter:
-    mode_msg = "Geometric filter mode: e (plain essential, no priors)\n"
-    print(mode_msg.strip())
-    log_file.write(mode_msg)
-    log_file.flush()
-    # 5. Filter matches with original geometric filter (no priors).
-    run_step("5. Filter matches with geometric filter (-g e, no priors)",
-             [os.path.join(OPENMVG_SFM_BIN, "openMVG_main_GeometricFilter"),
-              "-i", matches_dir+"/sfm_data.json",
-              "-m", matches_dir+"/matches.putative.bin",
-              "-g", "e",
-              "-o", matches_dir+"/matches.e.bin",
-              "-I", str(args.ransac_iter),
-              # "-c", "1000"   # Optional: Regions cache size (1000 images)
-              ],
-             log_file)
+  if not args.disable_dual_geometric_filter:
+
+    print("Dual geometric filter enabled: running standard and upright filters...")
+    # 5a. Standard
+    tmp_standard = os.path.join(matches_dir, "matches.standard.bin")
+    if not os.path.exists(tmp_standard):
+      if args.use_plain_geometric_filter:
+        cmd = [os.path.join(OPENMVG_SFM_BIN, "openMVG_main_GeometricFilter"), "-i", matches_dir+"/sfm_data.json", "-m", matches_dir+"/matches.putative.bin", "-g", "e", "-o", tmp_standard, "-I", str(args.ransac_iter)]
+      else:
+        imu_model = "p" if args.imu_pitch_roll_only else "i"
+        cmd = [os.path.join(OPENMVG_SFM_BIN, "openMVG_main_GeometricFilterWithPriors"), "-i", matches_dir+"/sfm_data.json", "-m", matches_dir+"/matches.putative.bin", "-g", imu_model, "-o", tmp_standard, "-I", str(args.ransac_iter), "-t", "50.0", "-M", str(args.min_inliers), "-T", str(args.geofilt_prec)]
+        if not args.disable_reestimate_rotation: cmd.append("-U")
+        if args.imu_reestimate_prec is not None: cmd.extend(["-Q", str(args.imu_reestimate_prec)])
+      run_step("5a. Standard Geometric Filter", cmd, log_file)
+      default_rot = os.path.join(matches_dir, "matches.e.rotations.json")
+      if os.path.exists(default_rot): os.rename(default_rot, os.path.join(matches_dir, "matches.standard.rotations.json"))
+    else:
+      print("5a. Standard Geometric Filter (skipped, matches.standard.bin exists)")
+    
+    # 5b. Upright
+    tmp_upright = os.path.join(matches_dir, "matches.upright.bin")
+    if not os.path.exists(tmp_upright):
+      # Generate restricted pairs for upright filter (only n+1, n+2)
+      upright_pairs = os.path.join(matches_dir, "pairs.upright.bin")
+      run_step("5b.1. Generate restricted pairs for Upright Filter",
+               [os.path.join(OPENMVG_SFM_BIN, "openMVG_main_PairGenerator"),
+                "-i", matches_dir+"/sfm_data.json",
+                "-o", upright_pairs,
+                "-m", "CONTIGUOUS", "-c", "2"],
+               log_file)
+      
+      cmd = [os.path.join(OPENMVG_SFM_BIN, "openMVG_main_GeometricFilter"), 
+             "-i", matches_dir+"/sfm_data.json", 
+             "-m", matches_dir+"/matches.putative.bin", 
+             "-p", upright_pairs,
+             "-g", "u", 
+             "-o", tmp_upright, 
+             "-I", str(args.ransac_iter)]
+      run_step("5b.2. Upright Geometric Filter (n+1, n+2 only)", cmd, log_file)
+      default_rot = os.path.join(matches_dir, "matches.e.rotations.json")
+      if os.path.exists(default_rot): os.rename(default_rot, os.path.join(matches_dir, "matches.upright.rotations.json"))
+    else:
+      print("5b. Upright Geometric Filter (skipped, matches.upright.bin exists)")
+
+
+
+    
+    # Merge using the new C++ tool
+    actual_matches = os.path.join(matches_dir, "matches.e.bin")
+    if not os.path.exists(actual_matches):
+      merge_cmd = [os.path.join(OPENMVG_SFM_BIN, "openMVG_main_MergeGeometricMatches"),
+                   "-m", tmp_standard + "," + tmp_upright,
+                   "-r", os.path.join(matches_dir, "matches.standard.rotations.json") + "," + os.path.join(matches_dir, "matches.upright.rotations.json"),
+                   "-o", os.path.join(matches_dir, "matches.e")]
+      run_step("5c. Merge Geometric Filters", merge_cmd, log_file)
+    else:
+      print("5c. Merge Geometric Filters (skipped, matches.e.bin exists)")
   else:
-    # 5. Filter matches using IMU-guided 2-point essential matrix solver
-    # This method uses IMU rotation data to:
-    #   - Pre-filter matches using epipolar constraint (filters out 30-70% invalid matches)
-    #   - Reduce RANSAC from 5-point to 2-point (known R, solve for t only)
-    #   - Run only 64 RANSAC iterations instead of 1024+ (much faster!)
-    # Result: ~4x speedup vs GPS heading method, more accurate filtering
-    imu_model = "p" if args.imu_pitch_roll_only else "i"
-    imu_mode_name = "p (IMU pitch/roll only)" if imu_model == "p" else "i (IMU full rotation)"
-    mode_msg = "Geometric filter mode: {}\n".format(imu_mode_name)
-    print(mode_msg.strip())
-    log_file.write(mode_msg)
-    log_file.flush()
-    geofilt_cmd = [os.path.join(OPENMVG_SFM_BIN, "openMVG_main_GeometricFilterWithPriors"),
-                   "-i", matches_dir+"/sfm_data.json",
-                   "-m", matches_dir+"/matches.putative.bin",
-                   "-g", imu_model,     # IMU-guided solver (full R or pitch/roll-only)
-                   "-o", matches_dir+"/matches.e.bin",
-                   "-I", str(args.ransac_iter),    # Iterations
-                   "-t", "50.0",   # RANSAC search limit (fixed bound)
-                   "-M", str(args.min_inliers),    # Min inlier count per pair
-                   "-T", str(args.geofilt_prec), # User-defined filter precision (0.0=Auto)
-                   # "-c", "1000"   # Optional: Regions cache size (1000 images)
-                   ]
-    if not args.disable_reestimate_rotation:
-      geofilt_cmd.append("-U")
-    if args.imu_reestimate_prec is not None:
-      geofilt_cmd.extend(["-Q", str(args.imu_reestimate_prec)])
-    run_step("5. Filter matches with IMU-guided solver", geofilt_cmd, log_file)
 
-  # 5b. Optional: Additional post-filtering by priors (now mostly redundant since priors are in step 5)
-  # Uncomment if you want stricter filtering after RANSAC
-  # run_step("5b. Filter matches by priors",
-  #           [os.path.join(OPENMVG_SFM_BIN, "openMVG_main_GeometricFilterByPriors"),
-  #           "-i", os.path.join(matches_dir, "sfm_data.json"),
-  #           "-m", os.path.join(matches_dir, "matches.e.bin"),
-  #           "-o", os.path.join(matches_dir, "matches.e.priors.bin"),
-  #           "-f", matches_dir,
-  #           "-y", "15.0", # Yaw tolerance
-  #           "-x", "10.0", # Pitch tolerance
-  #           "-z", "10.0", # Roll tolerance
-  #           "-a", "0.2"   # Altitude (ty) tolerance
-  #           ],
-  #           log_file)
+    # Original logic
+    actual_matches = os.path.join(matches_dir, "matches.e.bin")
+    if not os.path.exists(actual_matches):
+      if args.use_plain_geometric_filter:
+        run_step("5. Filter matches with geometric filter (-g e, no priors)", [os.path.join(OPENMVG_SFM_BIN, "openMVG_main_GeometricFilter"), "-i", matches_dir+"/sfm_data.json", "-m", matches_dir+"/matches.putative.bin", "-g", "e", "-o", actual_matches, "-I", str(args.ransac_iter)], log_file)
+      else:
+        imu_model = "p" if args.imu_pitch_roll_only else "i"
+        geofilt_cmd = [os.path.join(OPENMVG_SFM_BIN, "openMVG_main_GeometricFilterWithPriors"), "-i", matches_dir+"/sfm_data.json", "-m", matches_dir+"/matches.putative.bin", "-g", imu_model, "-o", actual_matches, "-I", str(args.ransac_iter), "-t", "50.0", "-M", str(args.min_inliers), "-T", str(args.geofilt_prec)]
+        if not args.disable_reestimate_rotation: geofilt_cmd.append("-U")
+        if args.imu_reestimate_prec is not None: geofilt_cmd.extend(["-Q", str(args.imu_reestimate_prec)])
+        run_step("5. Filter matches with IMU-guided solver", geofilt_cmd, log_file)
+    else:
+      print("5. Filter matches (skipped, matches.e.bin exists)")
 
-  actual_matches = os.path.join(matches_dir, "matches.e.bin")
+
 
   # Create the reconstruction if not present
   if not os.path.exists(reconstruction_dir):
