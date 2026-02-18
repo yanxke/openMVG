@@ -190,7 +190,7 @@ with open(log_path, "a") as log_file:
                [os.path.join(OPENMVG_SFM_BIN, "openMVG_main_PairGenerator"),
                 "-i", matches_dir+"/sfm_data.json",
                 "-o", upright_pairs,
-                "-m", "CONTIGUOUS", "-c", "2"],
+                "-m", "CONTIGUOUS", "-c", "4"],
                log_file)
       
       cmd = [os.path.join(OPENMVG_SFM_BIN, "openMVG_main_GeometricFilter"), 
@@ -205,20 +205,42 @@ with open(log_path, "a") as log_file:
       if os.path.exists(default_rot): os.rename(default_rot, os.path.join(matches_dir, "matches.upright.rotations.json"))
     else:
       print("5b. Upright Geometric Filter (skipped, matches.upright.bin exists)")
-
-
-
+    
+    # 5c. Contiguous Essential
+    tmp_contiguous_e = os.path.join(matches_dir, "matches.contiguous_e.bin")
+    if not os.path.exists(tmp_contiguous_e):
+      # Generate restricted pairs for contiguous essential filter (n+1..4)
+      contiguous_e_pairs = os.path.join(matches_dir, "pairs.contiguous_e.bin")
+      run_step("5c.1. Generate restricted pairs for Contiguous Essential Filter",
+               [os.path.join(OPENMVG_SFM_BIN, "openMVG_main_PairGenerator"),
+                "-i", matches_dir+"/sfm_data.json",
+                "-o", contiguous_e_pairs,
+                "-m", "CONTIGUOUS", "-c", "4"],
+               log_file)
+      
+      cmd = [os.path.join(OPENMVG_SFM_BIN, "openMVG_main_GeometricFilter"), 
+             "-i", matches_dir+"/sfm_data.json", 
+             "-m", matches_dir+"/matches.putative.bin", 
+             "-p", contiguous_e_pairs,
+             "-g", "e", 
+             "-o", tmp_contiguous_e, 
+             "-I", str(args.ransac_iter)]
+      run_step("5c.2. Contiguous Essential Geometric Filter (n+1..4 only)", cmd, log_file)
+      default_rot = os.path.join(matches_dir, "matches.e.rotations.json")
+      if os.path.exists(default_rot): os.rename(default_rot, os.path.join(matches_dir, "matches.contiguous_e.rotations.json"))
+    else:
+      print("5c. Contiguous Essential Geometric Filter (skipped, matches.contiguous_e.bin exists)")
     
     # Merge using the new C++ tool
     actual_matches = os.path.join(matches_dir, "matches.e.bin")
     if not os.path.exists(actual_matches):
       merge_cmd = [os.path.join(OPENMVG_SFM_BIN, "openMVG_main_MergeGeometricMatches"),
-                   "-m", tmp_standard + "," + tmp_upright,
-                   "-r", os.path.join(matches_dir, "matches.standard.rotations.json") + "," + os.path.join(matches_dir, "matches.upright.rotations.json"),
+                   "-m", tmp_standard + "," + tmp_upright + "," + tmp_contiguous_e,
+                   "-r", os.path.join(matches_dir, "matches.standard.rotations.json") + "," + os.path.join(matches_dir, "matches.upright.rotations.json") + "," + os.path.join(matches_dir, "matches.contiguous_e.rotations.json"),
                    "-o", os.path.join(matches_dir, "matches.e")]
-      run_step("5c. Merge Geometric Filters", merge_cmd, log_file)
+      run_step("5d. Merge Geometric Filters", merge_cmd, log_file)
     else:
-      print("5c. Merge Geometric Filters (skipped, matches.e.bin exists)")
+      print("5d. Merge Geometric Filters (skipped, matches.e.bin exists)")
   else:
 
     # Original logic

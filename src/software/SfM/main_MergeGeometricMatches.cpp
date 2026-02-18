@@ -171,19 +171,22 @@ int main(int argc, char ** argv)
   std::vector<std::string> vec_match_files = split(sMatchFiles, ',');
   std::vector<std::string> vec_rotation_files = split(sRotationFiles, ',');
 
+  if (vec_match_files.size() != vec_rotation_files.size())
+  {
+    OPENMVG_LOG_ERROR << "Mismatch between number of match files (" << vec_match_files.size() 
+                      << ") and rotation files (" << vec_rotation_files.size() << ").";
+    return EXIT_FAILURE;
+  }
+
   PairWiseMatches merged_matches;
   std::map<Pair, RelRotation> merged_rotations;
-
-  // Track match counts per pair for rotation selection
-  std::map<Pair, std::vector<size_t>> pair_counts_per_input; // pair -> [count1, count2, ...]
-  pair_counts_per_input.clear();
-
+  std::map<Pair, std::vector<size_t>> pair_counts_per_input; 
   std::vector<size_t> match_counts_per_file;
   std::vector<size_t> pair_counts_per_file;
 
-  size_t match_file_idx = 0;
-  for (const auto & f : vec_match_files)
+  for (size_t i = 0; i < vec_match_files.size(); ++i)
   {
+    const std::string & f = vec_match_files[i];
     PairWiseMatches current;
     bool ok = false;
     if (stlplus::extension_part(f) == "json") ok = LoadMatchesJson(f, current);
@@ -191,6 +194,8 @@ int main(int argc, char ** argv)
 
     if (!ok) {
       OPENMVG_LOG_WARNING << "Failed to load matches from: " << f;
+      match_counts_per_file.push_back(0);
+      pair_counts_per_file.push_back(0);
       continue;
     }
 
@@ -213,66 +218,40 @@ int main(int argc, char ** argv)
           if (unique.insert(m).second) merged.push_back(m);
       }
       
-      if (pair_counts_per_input[p].size() <= match_file_idx)
-        pair_counts_per_input[p].resize(match_file_idx + 1, 0);
-      pair_counts_per_input[p][match_file_idx] = inliers.size();
+      if (pair_counts_per_input[p].size() <= i)
+        pair_counts_per_input[p].resize(i + 1, 0);
+      pair_counts_per_input[p][i] = inliers.size();
     }
     match_counts_per_file.push_back(current_file_matches);
-    match_file_idx++;
   }
 
-  // Identify pairs in later files that were not in the first one
-  size_t new_pairs_in_upright = 0;
-  if (vec_match_files.size() > 1)
+  // Statistics: How many pairs were uniquely contributed by each file?
+  std::vector<size_t> unique_pairs_contributed(vec_match_files.size(), 0);
+  for (const auto & kv : pair_counts_per_input)
   {
-    for (const auto & kv : pair_counts_per_input)
+    for (size_t i = 0; i < kv.second.size(); ++i)
     {
-       // If it has count in index 1 (upright) but not index 0 (standard)
-       if (kv.second.size() > 1 && kv.second[1] > 0 && (kv.second[0] == 0))
-          new_pairs_in_upright++;
-    }
-  }
-
-  size_t rot_file_idx = 0;
-  for (const auto & f : vec_rotation_files)
-  {
-    std::map<Pair, RelRotation> current;
-    if (!LoadRotationsJson(f, current)) {
-      OPENMVG_LOG_WARNING << "Failed to load rotations from: " << f;
-      continue;
-    }
-
-    for (const auto & kv : current)
-    {
-      const Pair & p = kv.first;
-      // We pick the rotation from the file that had the most inliers for this pair,
-      // assuming rotation file index corresponds to match file index.
-      // If we have fewer rotation files than match files, we'll need to be careful.
-      if (merged_rotations.find(p) == merged_rotations.end())
-        merged_rotations[p] = kv.second;
-      else
+      if (kv.second[i] > 0)
       {
-        // Compare current with best
-        // Note: this logic assumes 1-to-1 match between -m and -r lists.
-        // If not, we just pick the first one we find or the one with highest count if we can map it.
-        // For simplicity, let's just keep the one with most inliers if we can find the counts.
-        size_t current_count = 0;
-        if (pair_counts_per_input.count(p) && pair_counts_per_input[p].size() > rot_file_idx)
-          current_count = pair_counts_per_input[p][rot_file_idx];
-          
-        // We'll need to know which file gave the *already stored* rotation.
-        // Let's just store the best count seen so far.
+        // Check if this pair existed in any previous file
+        bool previously_existed = false;
+        for (size_t j = 0; j < i; ++j) {
+          if (j < kv.second.size() && kv.second[j] > 0) {
+            previously_existed = true;
+            break;
+          }
+        }
+        if (!previously_existed) unique_pairs_contributed[i]++;
       }
     }
-    rot_file_idx++;
   }
-  
-  // Re-merging rotations with "best inlier" logic
-  merged_rotations.clear();
+
+  // Re-merging rotations with "best inlier" logic across all files
   for (size_t i = 0; i < vec_rotation_files.size(); ++i)
   {
     std::map<Pair, RelRotation> current;
-    LoadRotationsJson(vec_rotation_files[i], current);
+    if (!LoadRotationsJson(vec_rotation_files[i], current)) continue;
+    
     for (const auto & kv : current)
     {
       const Pair & p = kv.first;
@@ -280,18 +259,20 @@ int main(int argc, char ** argv)
         merged_rotations[p] = kv.second;
       else
       {
-        // Find best count
-        size_t best_count = 0;
-        // Search all previous rotation files to find the best count for this pair
+        // Check if current file has more inliers for this pair than the one we kept
+        size_t best_count_so_far = 0;
+        // Search which previous index held the currently stored rotation
+        // Actually, let's just find the max count across all indices processed so far
         for (size_t j = 0; j < i; ++j) {
            if (pair_counts_per_input.count(p) && pair_counts_per_input[p].size() > j)
-             best_count = std::max(best_count, pair_counts_per_input[p][j]);
+             best_count_so_far = std::max(best_count_so_far, pair_counts_per_input[p][j]);
         }
+        
         size_t current_count = 0;
         if (pair_counts_per_input.count(p) && pair_counts_per_input[p].size() > i)
           current_count = pair_counts_per_input[p][i];
         
-        if (current_count > best_count) merged_rotations[p] = kv.second;
+        if (current_count > best_count_so_far) merged_rotations[p] = kv.second;
       }
     }
   }
@@ -304,17 +285,14 @@ int main(int argc, char ** argv)
   size_t total_merged_matches = 0;
   for (const auto & kv : merged_matches) total_merged_matches += kv.second.size();
 
-  OPENMVG_LOG_INFO << "Merge Statistics:";
+  OPENMVG_LOG_INFO << "Merge Statistics (N=" << vec_match_files.size() << "):";
   for (size_t i = 0; i < vec_match_files.size(); ++i)
   {
-     OPENMVG_LOG_INFO << " - Input " << i << " (" << stlplus::basename_part(vec_match_files[i]) << "): " 
-                      << pair_counts_per_file[i] << " pairs, " << match_counts_per_file[i] << " matches.";
+     OPENMVG_LOG_INFO << " - Input " << i << " [" << stlplus::basename_part(vec_match_files[i]) << "]: " 
+                      << pair_counts_per_file[i] << " pairs, " << match_counts_per_file[i] << " matches. "
+                      << "(Added " << unique_pairs_contributed[i] << " new pairs to graph)";
   }
-  OPENMVG_LOG_INFO << " - Merged Output: " << merged_matches.size() << " pairs, " << total_merged_matches << " matches.";
-  if (vec_match_files.size() > 1)
-  {
-    OPENMVG_LOG_INFO << " - New pairs contributed by " << stlplus::basename_part(vec_match_files[1]) << " only: " << new_pairs_in_upright;
-  }
+  OPENMVG_LOG_INFO << " - Total Merged: " << merged_matches.size() << " pairs, " << total_merged_matches << " matches.";
 
   if (Save(merged_matches, out_bin)) OPENMVG_LOG_INFO << "Saved merged matches to: " << out_bin;
   if (SaveMatchesJsonFull(merged_matches, out_json)) OPENMVG_LOG_INFO << "Saved merged JSON matches to: " << out_json;
