@@ -47,7 +47,9 @@ public:
     ERelativeRotationInferenceMethod eRelativeRotationInferenceMethod,
     const rotation_averaging::RelativeRotations & relativeRot_In,
     Hash_Map<IndexT, Mat3> & map_globalR,
-    IndexT fixed_pose_id = UndefinedIndexT
+    IndexT fixed_pose_id = UndefinedIndexT,
+    const Hash_Map<IndexT, double> * pose_timestamps = nullptr,
+    const Hash_Map<IndexT, std::string> * pose_img_names = nullptr
   ) const;
 
   /// Reject edges of the view graph that do not produce triplets with tiny
@@ -55,7 +57,9 @@ public:
   void TripletRotationRejection(
     const double max_angular_error,
     std::vector<graph::Triplet> & vec_triplets,
-    rotation_averaging::RelativeRotations & relativeRotations) const;
+    rotation_averaging::RelativeRotations & relativeRotations,
+    const Hash_Map<IndexT, double> * pose_timestamps = nullptr,
+    const Hash_Map<IndexT, std::string> * pose_img_names = nullptr) const;
 
   /// Return the pairs validated by the GlobalRotation routine (inference can remove some)
   Pair_Set GetUsedPairs() const;

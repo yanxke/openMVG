@@ -15,8 +15,13 @@
 #include "openMVG/stl/stlMap.hpp"
 #include "openMVG/system/logger.hpp"
 #include "openMVG/system/loggerprogress.hpp"
+#include "openMVG/tracks/union_find.hpp"
 
 #include "third_party/histogram/histogram.hpp"
+
+#include <algorithm>
+#include <map>
+#include <set>
 
 namespace openMVG{
 namespace sfm{
@@ -33,7 +38,9 @@ bool GlobalSfM_Rotation_AveragingSolver::Run(
   ERelativeRotationInferenceMethod eRelativeRotationInferenceMethod,
   const RelativeRotations & relativeRot_In,
   Hash_Map<IndexT, Mat3> & map_globalR,
-  IndexT fixed_pose_id
+  IndexT fixed_pose_id,
+  const Hash_Map<IndexT, double> * pose_timestamps,
+  const Hash_Map<IndexT, std::string> * pose_img_names
 ) const
 {
   RelativeRotations relativeRotations = relativeRot_In;
@@ -52,7 +59,7 @@ bool GlobalSfM_Rotation_AveragingSolver::Run(
       std::vector<graph::Triplet> vec_triplets = graph::TripletListing(pairs);
 
       //-- Rejection triplet that are 'not' identity rotation (error to identity > 5°)
-      TripletRotationRejection(5.0f, vec_triplets, relativeRotations);
+      TripletRotationRejection(5.0f, vec_triplets, relativeRotations, pose_timestamps, pose_img_names);
 
       pairs = getPairs(relativeRotations);
       const std::set<IndexT> set_remainingIds = graph::CleanGraph_KeepLargestBiEdge_Nodes<Pair_Set, IndexT>(pairs);
@@ -175,38 +182,38 @@ bool GlobalSfM_Rotation_AveragingSolver::Run(
   return bSuccess;
 }
 
-/// Reject edges of the view graph that do not produce triplets with tiny
-///  angular error once rotation composition have been computed.
 void GlobalSfM_Rotation_AveragingSolver::TripletRotationRejection(
   const double max_angular_error,
   std::vector<graph::Triplet> & vec_triplets,
-  RelativeRotations & relativeRotations) const
+  RelativeRotations & relativeRotations,
+  const Hash_Map<IndexT, double> * pose_timestamps,
+  const Hash_Map<IndexT, std::string> * pose_img_names) const
 {
+  const size_t triplets_before_count = vec_triplets.size();
   const size_t edges_start_count = relativeRotations.size();
 
   RelativeRotations_map map_relatives = getMap(relativeRotations);
   RelativeRotations_map map_relatives_validated;
 
-  //--
-  // ROTATION OUTLIERS DETECTION
-  //--
+  struct TripletWithErr {
+    graph::Triplet triplet;
+    float err;
+  };
+  std::vector<TripletWithErr> all_triplets;
+  all_triplets.reserve(vec_triplets.size());
 
-  std::vector<graph::Triplet> vec_triplets_validated;
-  vec_triplets_validated.reserve(vec_triplets.size());
+  //--
+  // 1. ROTATION ERROR COMPUTATION
+  //--
 
   std::vector<float> vec_errToIdentityPerTriplet;
   vec_errToIdentityPerTriplet.reserve(vec_triplets.size());
-  // Compute the composition error for each length 3 cycles
-  openMVG::system::LoggerProgress progress_bar(
-    static_cast<std::uint32_t>(vec_triplets.size()),
-    "- Rotation triplet filtering -",
-    25);
+  
   for (size_t i = 0; i < vec_triplets.size(); ++i)
   {
     const graph::Triplet & triplet = vec_triplets[i];
     const IndexT I = triplet.i, J = triplet.j , K = triplet.k;
 
-    //-- Find the three relative rotations
     const Pair ij(I,J), ji(J,I);
     const Mat3 RIJ = (map_relatives.count(ij)) ?
       map_relatives.at(ij).Rij : Mat3(map_relatives.at(ji).Rij.transpose());
@@ -219,31 +226,171 @@ void GlobalSfM_Rotation_AveragingSolver::TripletRotationRejection(
     const Mat3 RKI = (map_relatives.count(ki)) ?
       map_relatives.at(ki).Rij : Mat3(map_relatives.at(ik).Rij.transpose());
 
-    const Mat3 Rot_To_Identity = RIJ * RJK * RKI; // motion composition
+    const Mat3 Rot_To_Identity = RIJ * RJK * RKI;
     const float angularErrorDegree = static_cast<float>(R2D(getRotationMagnitude(Rot_To_Identity)));
     vec_errToIdentityPerTriplet.push_back(angularErrorDegree);
 
-    if (angularErrorDegree < max_angular_error)
-    {
-      vec_triplets_validated.push_back(triplet);
-
-      if (map_relatives.count(ij))
-        map_relatives_validated[ij] = map_relatives.at(ij);
-      else
-        map_relatives_validated[ji] = map_relatives.at(ji);
-
-      if (map_relatives.count(jk))
-        map_relatives_validated[jk] = map_relatives.at(jk);
-      else
-        map_relatives_validated[kj] = map_relatives.at(kj);
-
-      if (map_relatives.count(ki))
-        map_relatives_validated[ki] = map_relatives.at(ki);
-      else
-        map_relatives_validated[ik] = map_relatives.at(ik);
+    if (angularErrorDegree <= 15.0f) {
+      all_triplets.push_back({triplet, angularErrorDegree});
     }
-    ++progress_bar;
   }
+
+  //--
+  // 2. CONNECTIVITY RESCUE PASS
+  //--
+
+  std::vector<graph::Triplet> vec_triplets_validated;
+  std::set<size_t> validated_triplet_indices;
+
+  if (pose_timestamps != nullptr && !all_triplets.empty())
+  {
+    std::set<IndexT> all_poses;
+    for (const auto & tr : all_triplets) {
+      all_poses.insert(tr.triplet.i);
+      all_poses.insert(tr.triplet.j);
+      all_poses.insert(tr.triplet.k);
+    }
+    
+    Hash_Map<IndexT, uint32_t> pose_to_uf;
+    uint32_t uf_idx = 0;
+    for (IndexT p : all_poses) pose_to_uf[p] = uf_idx++;
+
+    UnionFind uf;
+    uf.InitSets(static_cast<unsigned int>(all_poses.size()));
+
+    // A. Add strict 5 degree triplets
+    for (size_t i = 0; i < all_triplets.size(); ++i) {
+      if (all_triplets[i].err <= max_angular_error) {
+        uf.Union(pose_to_uf[all_triplets[i].triplet.i], pose_to_uf[all_triplets[i].triplet.j]);
+        uf.Union(pose_to_uf[all_triplets[i].triplet.j], pose_to_uf[all_triplets[i].triplet.k]);
+        validated_triplet_indices.insert(i);
+      }
+    }
+
+    // Identify nodes that are currently in the 5 degree component graph
+    std::set<IndexT> poses_in_5deg;
+    for (size_t idx : validated_triplet_indices) {
+       poses_in_5deg.insert(all_triplets[idx].triplet.i);
+       poses_in_5deg.insert(all_triplets[idx].triplet.j);
+       poses_in_5deg.insert(all_triplets[idx].triplet.k);
+    }
+
+    // Precompute bounds for all components
+    std::map<uint32_t, std::pair<double, double>> comp_bounds;
+    for (IndexT p : all_poses) {
+      if (pose_timestamps->count(p)) {
+        uint32_t r = uf.Find(pose_to_uf[p]);
+        double t = pose_timestamps->at(p);
+        if (comp_bounds.count(r)) {
+          comp_bounds[r].first = std::min(comp_bounds[r].first, t);
+          comp_bounds[r].second = std::max(comp_bounds[r].second, t);
+        } else {
+          comp_bounds[r] = {t, t};
+        }
+      }
+    }
+
+    // B. Relax constraints for temporal gaps
+    std::vector<size_t> candidate_indices;
+    for (size_t i = 0; i < all_triplets.size(); ++i) {
+      if (all_triplets[i].err > max_angular_error) candidate_indices.push_back(i);
+    }
+    std::sort(candidate_indices.begin(), candidate_indices.end(), 
+              [&](size_t a, size_t b) { return all_triplets[a].err < all_triplets[b].err; });
+
+    std::vector<IndexT> rescued_nodes;
+
+    for (size_t idx : candidate_indices) {
+      const auto & tr = all_triplets[idx].triplet;
+      uint32_t roots[3] = {uf.Find(pose_to_uf[tr.i]), uf.Find(pose_to_uf[tr.j]), uf.Find(pose_to_uf[tr.k])};
+      
+      bool merges_useful = false;
+      if (roots[0] != roots[1] || roots[1] != roots[2] || roots[0] != roots[2]) {
+        for (int a = 0; a < 3 && !merges_useful; ++a) {
+          for (int b = a + 1; b < 3 && !merges_useful; ++b) {
+            if (roots[a] == roots[b]) continue;
+            if (comp_bounds.count(roots[a]) && comp_bounds.count(roots[b])) {
+              double dist = std::max(0.0, std::max(comp_bounds[roots[a]].first - comp_bounds[roots[b]].second, 
+                                                  comp_bounds[roots[b]].first - comp_bounds[roots[a]].second));
+              if (dist <= 5.0) merges_useful = true;
+            }
+          }
+        }
+      }
+
+      if (merges_useful) {
+        validated_triplet_indices.insert(idx);
+        uf.Union(roots[0], roots[1]);
+        uint32_t new_root = uf.Find(roots[0]);
+        uf.Union(new_root, roots[2]);
+        new_root = uf.Find(new_root);
+
+        // Update bounds for the new merged component
+        std::pair<double, double> merged_b(1e18, -1e18);
+        for (int i=0; i<3; ++i) {
+          if (comp_bounds.count(roots[i])) {
+            merged_b.first = std::min(merged_b.first, comp_bounds[roots[i]].first);
+            merged_b.second = std::max(merged_b.second, comp_bounds[roots[i]].second);
+          }
+        }
+        comp_bounds[new_root] = merged_b;
+      }
+    }
+
+    // Log rescued nodes
+    std::set<IndexT> poses_in_rescued;
+    for (size_t idx : validated_triplet_indices) {
+       poses_in_rescued.insert(all_triplets[idx].triplet.i);
+       poses_in_rescued.insert(all_triplets[idx].triplet.j);
+       poses_in_rescued.insert(all_triplets[idx].triplet.k);
+    }
+    
+    for (IndexT p : poses_in_rescued) {
+      if (poses_in_5deg.count(p) == 0) {
+        rescued_nodes.push_back(p);
+        if (pose_img_names && pose_img_names->count(p)) {
+          OPENMVG_LOG_INFO << "RESCUED critical node: " << p << " (" << pose_img_names->at(p) << ")";
+        } else {
+          OPENMVG_LOG_INFO << "RESCUED critical node: " << p;
+        }
+      }
+    }
+    if (!rescued_nodes.empty()) {
+      OPENMVG_LOG_INFO << "Summary: Recovered " << rescued_nodes.size() << " nodes via rotation relaxation.";
+    }
+  }
+  else
+  {
+    // Fallback to standard 5 degree rejection for all triplets
+    for (size_t i = 0; i < all_triplets.size(); ++i) {
+      if (all_triplets[i].err <= max_angular_error) {
+        validated_triplet_indices.insert(i);
+      }
+    }
+  }
+
+  //--
+  // 3. FINAL VALIDATION
+  //--
+
+  for (size_t idx : validated_triplet_indices)
+  {
+    const graph::Triplet & triplet = all_triplets[idx].triplet;
+    vec_triplets_validated.push_back(triplet);
+
+    const IndexT I = triplet.i, J = triplet.j , K = triplet.k;
+    const Pair ij(I,J), ji(J,I), jk(J,K), kj(K,J), ki(K,I), ik(I,K);
+
+    if (map_relatives.count(ij)) map_relatives_validated[ij] = map_relatives.at(ij);
+    else if (map_relatives.count(ji)) map_relatives_validated[ji] = map_relatives.at(ji);
+
+    if (map_relatives.count(jk)) map_relatives_validated[jk] = map_relatives.at(jk);
+    else if (map_relatives.count(kj)) map_relatives_validated[kj] = map_relatives.at(kj);
+
+    if (map_relatives.count(ki)) map_relatives_validated[ki] = map_relatives.at(ki);
+    else if (map_relatives.count(ik)) map_relatives_validated[ik] = map_relatives.at(ik);
+  }
+
   map_relatives = std::move(map_relatives_validated);
 
   // update to keep only useful triplets
@@ -268,7 +415,7 @@ void GlobalSfM_Rotation_AveragingSolver::TripletRotationRejection(
 
   {
     os << "\nTriplets filtering based on unit cycle rotation composition error:"
-      << "\n#Triplets before: " << vec_triplets.size()
+      << "\n#Triplets before: " << triplets_before_count
       << "\n#Triplets after: " << vec_triplets_validated.size();
     OPENMVG_LOG_INFO << os.str();
   }
