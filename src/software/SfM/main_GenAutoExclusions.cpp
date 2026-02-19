@@ -36,6 +36,7 @@
 #include <iomanip>
 #include <limits>
 #include <map>
+#include <unordered_map>
 #include <memory>
 #include <numeric>
 #include <random>
@@ -96,6 +97,16 @@ struct ExclusionsV2
 {
   std::set<Pair> manual;
   std::set<Pair> auto_pairs;
+};
+
+struct PairHash
+{
+  std::size_t operator()(const Pair & p) const noexcept
+  {
+    const std::size_t h1 = std::hash<IndexT>{}(p.first);
+    const std::size_t h2 = std::hash<IndexT>{}(p.second);
+    return h1 ^ (h2 * 2654435761ULL + 0x9e3779b9ULL + (h1 << 6) + (h1 >> 2));
+  }
 };
 
 Mat3 DeviceToCameraRotation()
@@ -480,7 +491,7 @@ bool CheckHomographyPlanar(
   }
 
   const double ransac_threshold = 4.0;
-  const int iterations = 512;
+  const int iterations = 200;
   std::vector<size_t> all_idx(pts_i.size());
   std::iota(all_idx.begin(), all_idx.end(), 0);
 
@@ -536,6 +547,10 @@ bool CheckHomographyPlanar(
     {
       best_inliers = inliers;
       best_H = H;
+      if (best_inliers == pts_i.size())
+      {
+        break;  // perfect model found, no need for more iterations
+      }
     }
   }
 
@@ -628,7 +643,7 @@ bool RecoverRelativeRotationFromPoints(
 
 bool LoadGeometricRotations(
   const std::string & path,
-  std::map<Pair, Mat3> & pair_rotations)
+  std::unordered_map<Pair, Mat3, PairHash> & pair_rotations)
 {
   pair_rotations.clear();
   if (!stlplus::is_file(path))
@@ -803,7 +818,7 @@ int main(int argc, char ** argv)
     views[kv.first] = info;
   }
 
-  std::map<Pair, Mat3> geometric_rotations;
+  std::unordered_map<Pair, Mat3, PairHash> geometric_rotations;
   if (LoadGeometricRotations(rotations_path, geometric_rotations))
   {
     OPENMVG_LOG_INFO << "Loaded " << geometric_rotations.size()
@@ -818,7 +833,7 @@ int main(int argc, char ** argv)
   OPENMVG_LOG_INFO << "Existing exclusions: manual=" << existing.manual.size()
                    << ", auto=" << existing.auto_pairs.size();
 
-  std::map<IndexT, std::vector<Vec2>> feature_cache;
+  std::unordered_map<IndexT, std::vector<Vec2>> feature_cache;
   std::set<Pair> new_auto_pairs;
   std::vector<std::pair<IndexT, double>> timestamped_views;
   timestamped_views.reserve(views.size());
@@ -829,6 +844,10 @@ int main(int argc, char ** argv)
       timestamped_views.emplace_back(kv.first, kv.second.timestamp_s);
     }
   }
+
+  std::sort(timestamped_views.begin(), timestamped_views.end(),
+    [](const std::pair<IndexT, double> & a, const std::pair<IndexT, double> & b)
+    { return a.second < b.second; });
 
   size_t n_checked = 0;
   size_t n_temporal = 0;
@@ -843,6 +862,17 @@ int main(int argc, char ** argv)
     const Pair pair = kv.first;
     const IndMatches & matches = kv.second;
     ++n_checked;
+
+    if (total_pairs > 0)
+    {
+      const size_t pct_done = (n_checked * 100) / total_pairs;
+      while (pct_done >= next_progress_pct && next_progress_pct <= 100)
+      {
+        OPENMVG_LOG_INFO << "Analysis progress: " << next_progress_pct << "% (" << n_checked
+                         << "/" << total_pairs << " pairs)";
+        next_progress_pct += 10;
+      }
+    }
 
     const auto it_i = views.find(pair.first);
     const auto it_j = views.find(pair.second);
@@ -864,26 +894,21 @@ int main(int argc, char ** argv)
         ++n_temporal;
       }
     }
+    if (!stats.temporal)
+    {
+      continue;  // skip feature loading, bbox, homography RANSAC, and IMU check
+    }
 
     auto loadFeaturesFor = [&](const IndexT view_id, const ViewInfo & info) -> const std::vector<Vec2> *
     {
-      auto it = feature_cache.find(view_id);
-      if (it != feature_cache.end())
+      const auto result = feature_cache.emplace(view_id, std::vector<Vec2>());
+      if (result.second)
       {
-        return &it->second;
+        const std::string feat_path = stlplus::create_filespec(
+          matches_dir, stlplus::basename_part(info.filename), "feat");
+        LoadFeatureCoords(feat_path, result.first->second);
       }
-      std::vector<Vec2> coords;
-      const std::string feat_path = stlplus::create_filespec(
-        matches_dir, stlplus::basename_part(info.filename), "feat");
-      if (!LoadFeatureCoords(feat_path, coords))
-      {
-        feature_cache.emplace(view_id, std::vector<Vec2>());
-      }
-      else
-      {
-        feature_cache.emplace(view_id, std::move(coords));
-      }
-      return &feature_cache.find(view_id)->second;
+      return &result.first->second;
     };
 
     const std::vector<Vec2> * feats_i = loadFeaturesFor(pair.first, vi);
@@ -923,6 +948,10 @@ int main(int argc, char ** argv)
         ++n_bbox;
       }
     }
+    if (!bbox_small)
+    {
+      continue;  // skip expensive homography RANSAC and IMU check
+    }
 
     const bool hom_disabled = args.max_homography_error >= 9999.0;
     bool hom_fits = hom_disabled;
@@ -940,6 +969,10 @@ int main(int argc, char ** argv)
           ++n_hom;
         }
       }
+    }
+    if (!hom_fits)
+    {
+      continue;  // skip IMU check
     }
 
     Mat3 R_imu_rel = Mat3::Identity();
@@ -982,7 +1015,7 @@ int main(int argc, char ** argv)
       }
     }
 
-    stats.exclude = stats.temporal && bbox_small && hom_fits && imu_mismatch;
+    stats.exclude = imu_mismatch;  // temporal, bbox, hom already confirmed above
     if (stats.exclude)
     {
       new_auto_pairs.insert(pair);
@@ -997,17 +1030,6 @@ int main(int argc, char ** argv)
           << (std::isnan(stats.imu_err) ? 0.0 : stats.imu_err) << "deg"
           << " [" << vi.filename << "] [" << vj.filename << "]";
       OPENMVG_LOG_INFO << oss.str();
-    }
-
-    if (total_pairs > 0)
-    {
-      const size_t pct_done = (n_checked * 100) / total_pairs;
-      while (pct_done >= next_progress_pct && next_progress_pct <= 100)
-      {
-        OPENMVG_LOG_INFO << "Analysis progress: " << next_progress_pct << "% (" << n_checked
-                         << "/" << total_pairs << " pairs)";
-        next_progress_pct += 10;
-      }
     }
   }
 
@@ -1029,28 +1051,30 @@ int main(int argc, char ** argv)
     std::vector<IndexT> side_i(1, seed.first);
     std::vector<IndexT> side_j(1, seed.second);
 
+    auto collectInWindow = [&](const double t_center, std::vector<IndexT> & side)
+    {
+      const double lo = t_center - args.expansion_time_window;
+      const double hi = t_center + args.expansion_time_window;
+      const auto begin_it = std::lower_bound(
+        timestamped_views.begin(), timestamped_views.end(), lo,
+        [](const std::pair<IndexT, double> & a, double val) { return a.second < val; });
+      const auto end_it = std::upper_bound(
+        timestamped_views.begin(), timestamped_views.end(), hi,
+        [](double val, const std::pair<IndexT, double> & a) { return val < a.second; });
+      for (auto it = begin_it; it != end_it; ++it)
+      {
+        side.push_back(it->first);
+      }
+    };
+
     if (it_i->second.has_timestamp)
     {
-      const double t_i = it_i->second.timestamp_s;
-      for (const auto & tv : timestamped_views)
-      {
-        if (std::abs(tv.second - t_i) <= args.expansion_time_window)
-        {
-          side_i.push_back(tv.first);
-        }
-      }
+      collectInWindow(it_i->second.timestamp_s, side_i);
     }
 
     if (it_j->second.has_timestamp)
     {
-      const double t_j = it_j->second.timestamp_s;
-      for (const auto & tv : timestamped_views)
-      {
-        if (std::abs(tv.second - t_j) <= args.expansion_time_window)
-        {
-          side_j.push_back(tv.first);
-        }
-      }
+      collectInWindow(it_j->second.timestamp_s, side_j);
     }
 
     std::sort(side_i.begin(), side_i.end());
