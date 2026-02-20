@@ -58,6 +58,8 @@ constexpr size_t kLegacyMinTripletTrackCount = 30;
 constexpr size_t kCloseTimeRelaxedMinTripletTrackCount = 10;
 constexpr double kLegacyInlierSupportRatio = 0.33;
 constexpr double kCloseTimeInlierSupportRatio = 0.2;
+constexpr double kLegacyPrecision = 4.0;
+constexpr double kCloseTimeRelaxedPrecision = 8.0;
 
 // NOTE: Historical expression had a bug::
 //   (vec_inliers.size() > 30 && 0.33 * tracks.size())
@@ -675,7 +677,7 @@ void GlobalSfM_Translation_AveragingSolver::ComputePutativeTranslation_EdgesCove
             return false;
           }
 
-          double dPrecision = 4.0; // upper bound of the residual pixel reprojection error
+          double dPrecision = allow_close_time_relaxed ? kCloseTimeRelaxedPrecision : kLegacyPrecision; // upper bound of the residual pixel reprojection error
           std::vector<Vec3> vec_tis(3);
           std::vector<uint32_t> vec_inliers;
           openMVG::tracks::STLMAPTracks pose_triplet_tracks;

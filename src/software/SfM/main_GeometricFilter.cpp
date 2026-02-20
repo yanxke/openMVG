@@ -30,6 +30,12 @@
 #include "openMVG/sfm/sfm_data_io.hpp"
 #include "openMVG/stl/stl.hpp"
 #include "openMVG/system/timer.hpp"
+#include "openMVG/multiview/motion_from_essential.hpp"
+#include "openMVG/multiview/solver_essential_eight_point.hpp"
+#include "openMVG/multiview/triangulation.hpp"
+#include "openMVG/geometry/pose3.hpp"
+
+
 
 #include "third_party/cmdLine/cmdLine.h"
 #include "third_party/stlplus3/filesystemSimplified/file_system.hpp"
@@ -55,6 +61,146 @@ enum EGeometricModel
   ESSENTIAL_MATRIX_ORTHO   = 4,
   ESSENTIAL_MATRIX_UPRIGHT = 5
 };
+
+/// Write a JSON file containing the relative rotation (as quaternion) for every
+/// geometrically-verified essential-matrix pair. The file is placed alongside
+/// the filtered matches file and is named "matches.e.rotations.json".
+///
+/// The rotation is recovered by:
+///   1. Lifting inlier pixel coords to bearing vectors via the camera model.
+///   2. Fitting an essential matrix with the 8-point algorithm.
+///   3. Decomposing E into 4 candidate poses (MotionFromEssential).
+///   4. Selecting the pose with the most points passing a cheirality check.
+///
+/// @param map_GeometricMatches  Inlier matches keyed by (view_i, view_j).
+/// @param sfm_data              SfM data providing views and intrinsics.
+/// @param regions_provider      Feature regions used to look up pixel coords.
+/// @param sFilteredMatchesFilename  Path to matches.e.bin (used to derive output dir).
+void SavePairRotationsJson(
+  const PairWiseMatches & map_GeometricMatches,
+  const sfm::SfM_Data & sfm_data,
+  const std::shared_ptr<sfm::Regions_Provider> & regions_provider,
+  const std::string & sFilteredMatchesFilename)
+{
+  const std::string sRotationsJsonPath = stlplus::create_filespec(
+      stlplus::folder_part(sFilteredMatchesFilename),
+      "matches.e.rotations",
+      "json");
+  std::ofstream rot_stream(sRotationsJsonPath);
+  if (!rot_stream)
+  {
+    OPENMVG_LOG_WARNING << "Cannot write rotations JSON to: " << sRotationsJsonPath;
+    return;
+  }
+
+  rot_stream << "{\n  \"version\": 1,\n  \"pairs\": [\n";
+  bool first_pair = true;
+
+  for (const auto & match_entry : map_GeometricMatches)
+  {
+    const Pair & pairIdx = match_entry.first;
+    const IndMatches & inlier_matches = match_entry.second;
+    if (inlier_matches.size() < 5) continue;
+
+    // Retrieve views and intrinsics
+    auto vi = sfm_data.GetViews().find(pairIdx.first);
+    auto vj = sfm_data.GetViews().find(pairIdx.second);
+    if (vi == sfm_data.GetViews().end() || vj == sfm_data.GetViews().end()) continue;
+
+    auto ii = sfm_data.GetIntrinsics().find(vi->second->id_intrinsic);
+    auto ij = sfm_data.GetIntrinsics().find(vj->second->id_intrinsic);
+    if (ii == sfm_data.GetIntrinsics().end() || ij == sfm_data.GetIntrinsics().end()) continue;
+
+    const cameras::IntrinsicBase * cam_I = ii->second.get();
+    const cameras::IntrinsicBase * cam_J = ij->second.get();
+    if (!cam_I || !cam_J) continue;
+
+    // Get pixel coordinates of inlier matches
+    Mat2X xI, xJ;
+    MatchesPairToMat(pairIdx, inlier_matches, &sfm_data, regions_provider, xI, xJ);
+    if (xI.cols() < 5) continue;
+
+    // Lift to bearing vectors
+    const Mat3X bI = (*cam_I)(xI);
+    const Mat3X bJ = (*cam_J)(xJ);
+
+    // Fit essential matrix via 8-point algorithm (inliers are already geometrically valid)
+    std::vector<Mat3> E_vec;
+    openMVG::EightPointRelativePoseSolver::Solve(bI, bJ, &E_vec);
+    if (E_vec.empty()) continue;
+
+    // Decompose into up to 4 candidate poses
+    std::vector<geometry::Pose3> poses;
+    openMVG::MotionFromEssential(E_vec[0], &poses);
+    if (poses.empty()) continue;
+
+    // Resolve cheirality ambiguity: pick pose with most points in front of both cameras
+    const geometry::Pose3 pose_identity(Mat3::Identity(), Vec3::Zero());
+    int best_idx = 0, best_count = 0;
+    const size_t n_test = std::min<size_t>(20, static_cast<size_t>(bI.cols()));
+    for (size_t k = 0; k < poses.size(); ++k)
+    {
+      int count = 0;
+      for (size_t m = 0; m < n_test; ++m)
+      {
+        Vec3 X;
+        if (openMVG::Triangulate2View(
+              pose_identity.rotation(), pose_identity.translation(), bI.col(m),
+              poses[k].rotation(),     poses[k].translation(),      bJ.col(m),
+              X, openMVG::ETriangulationMethod::DEFAULT))
+        {
+          ++count;
+        }
+      }
+      if (count > best_count) { best_count = count; best_idx = static_cast<int>(k); }
+    }
+
+    // Convert rotation matrix to quaternion (w, x, y, z)
+    const Mat3 R = poses[static_cast<size_t>(best_idx)].rotation();
+    double qw, qx, qy, qz;
+    const double tr = R(0,0) + R(1,1) + R(2,2);
+    if (tr > 0.0)
+    {
+      const double s = std::sqrt(tr + 1.0) * 2.0; // s = 4*qw
+      qw = 0.25 * s;
+      qx = (R(2,1) - R(1,2)) / s;
+      qy = (R(0,2) - R(2,0)) / s;
+      qz = (R(1,0) - R(0,1)) / s;
+    }
+    else if (R(0,0) > R(1,1) && R(0,0) > R(2,2))
+    {
+      const double s = std::sqrt(1.0 + R(0,0) - R(1,1) - R(2,2)) * 2.0; // s = 4*qx
+      qw = (R(2,1) - R(1,2)) / s;
+      qx = 0.25 * s;
+      qy = (R(0,1) + R(1,0)) / s;
+      qz = (R(0,2) + R(2,0)) / s;
+    }
+    else if (R(1,1) > R(2,2))
+    {
+      const double s = std::sqrt(1.0 + R(1,1) - R(0,0) - R(2,2)) * 2.0; // s = 4*qy
+      qw = (R(0,2) - R(2,0)) / s;
+      qx = (R(0,1) + R(1,0)) / s;
+      qy = 0.25 * s;
+      qz = (R(1,2) + R(2,1)) / s;
+    }
+    else
+    {
+      const double s = std::sqrt(1.0 + R(2,2) - R(0,0) - R(1,1)) * 2.0; // s = 4*qz
+      qw = (R(1,0) - R(0,1)) / s;
+      qx = (R(0,2) + R(2,0)) / s;
+      qy = (R(1,2) + R(2,1)) / s;
+      qz = 0.25 * s;
+    }
+
+    if (!first_pair) rot_stream << ",\n";
+    first_pair = false;
+    rot_stream << "    {\"i\": " << pairIdx.first << ", \"j\": " << pairIdx.second
+               << ", \"qw\": " << qw << ", \"qx\": " << qx << ", \"qy\": " << qy << ", \"qz\": " << qz << "}";
+  }
+
+  rot_stream << "\n  ]\n}\n";
+  OPENMVG_LOG_INFO << "Saved pair rotations to: " << sRotationsJsonPath;
+}
 
 /// Compute corresponding features between a series of views:
 /// - Load view images description (regions: features & descriptors)
@@ -246,7 +392,7 @@ int main( int argc, char** argv )
   }
 
   // Show the progress on the command line:
-  system::LoggerProgress progress(1, {}, 1);
+  system::LoggerProgress progress(1, {}, 5);
 
   if ( !regions_provider->load( sfm_data, sMatchesDirectory, regions_type, &progress ) )
   {
@@ -263,6 +409,7 @@ int main( int argc, char** argv )
     OPENMVG_LOG_ERROR << "Failed to load the initial matches file.";
     return EXIT_FAILURE;
   }
+  OPENMVG_LOG_INFO << "Loaded " << map_PutativeMatches.size() << " putative matching pairs.";
 
   if ( !sInputPairsFilename.empty() )
   {
@@ -272,8 +419,8 @@ int main( int argc, char** argv )
     loadPairs( sfm_data.GetViews().size(), sInputPairsFilename, input_pairs );
 
     // Filter matches with the given pairs
-    OPENMVG_LOG_INFO << "Filtering matches with the given pairs.";
     map_PutativeMatches = getPairs( map_PutativeMatches, input_pairs );
+    OPENMVG_LOG_INFO << "Number of putative pairs after input-pair filtering: " << map_PutativeMatches.size();
   }
 
   //---------------------------------------
@@ -397,6 +544,15 @@ int main( int argc, char** argv )
     {
       OPENMVG_LOG_INFO << "Saved JSON matches to: " << sJsonFilename;
     }
+
+    // Write per-pair relative rotations for ESSENTIAL_MATRIX model types.
+    if (eGeometricModelToCompute == ESSENTIAL_MATRIX ||
+        eGeometricModelToCompute == ESSENTIAL_MATRIX_UPRIGHT ||
+        eGeometricModelToCompute == ESSENTIAL_MATRIX_ANGULAR)
+    {
+      SavePairRotationsJson(map_GeometricMatches, sfm_data, regions_provider, sFilteredMatchesFilename);
+    }
+
 
     // -- export Geometric View Graph statistics
     graph::getGraphStatistics(sfm_data.GetViews().size(), getPairs(map_GeometricMatches));

@@ -767,13 +767,27 @@ bool GlobalSfMReconstructionEngine_RelativeMotions::Compute_Global_Rotations
     }
   }
 
+  Hash_Map<IndexT, double> pose_timestamps;
+  Hash_Map<IndexT, std::string> pose_img_names;
+  for (const auto & view_it : sfm_data_.GetViews())
+  {
+    const auto & view = view_it.second;
+    if (view->id_pose != UndefinedIndexT)
+    {
+      if (view->b_has_capture_time_epoch_)
+        pose_timestamps[view->id_pose] = view->capture_time_epoch_;
+      pose_img_names[view->id_pose] = view->s_Img_path;
+    }
+  }
+
   GlobalSfM_Rotation_AveragingSolver rotation_averaging_solver;
   auto run_rotation_averaging = [&](const rotation_averaging::RelativeRotations & rels) -> bool
   {
     system::Timer t;
     const bool ok = rotation_averaging_solver.Run(
       eRotation_averaging_method_, eRelativeRotationInferenceMethod,
-      rels, global_rotations, world_pose_id);
+      rels, global_rotations, world_pose_id,
+      &pose_timestamps, &pose_img_names);
 
     OPENMVG_LOG_INFO
       << "Found #global_rotations: " << global_rotations.size() << "\n"
