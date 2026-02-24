@@ -5442,7 +5442,7 @@ Samsung SL620;6.08
 Samsung SL630;6.08
 Samsung SL720;6.08
 Samsung SL820;6.08
-Samsung SM-A156U;3.4
+Samsung SM-A156U;2.56
 Samsung SM-A320FL;24
 Samsung SM-A526U1;4.8
 Samsung SM-A5260;4.8
