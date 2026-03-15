@@ -5458,6 +5458,7 @@ Samsung SM-G9910;5.43
 Samsung SM-S901U;5.6
 Samsung SM-S9080;5.6
 Samsung SM-S9010;5.6
+Samsung SM-S931U;5.6
 Samsung ST10;5.744
 Samsung ST100;6.16
 Samsung ST1000;6.16
