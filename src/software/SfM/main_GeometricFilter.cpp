@@ -730,7 +730,7 @@ int main( int argc, char** argv )
           current_chunk_bytes +=
             3ull * sizeof(std::uint64_t) +
             static_cast<std::uint64_t>(matches.size()) * 2ull * sizeof(std::uint64_t);
-          chunk_matches.insert({pair, std::move(matches)});
+          chunk_matches.emplace(pair, std::move(matches));
           if (current_chunk_bytes >= kStreamingChunkBytes)
           {
             if (!flush_chunk(chunk_matches))
