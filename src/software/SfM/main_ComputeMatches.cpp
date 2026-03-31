@@ -11,6 +11,7 @@
 #include "openMVG/matching/indMatch.hpp"
 #include "openMVG/matching/indMatch_utils.hpp"
 #include "openMVG/matching/pairwiseAdjacencyDisplay.hpp"
+#include "openMVG/matching/sharded_pairwise_matches.hpp"
 #include "openMVG/matching_image_collection/Cascade_Hashing_Matcher_Regions.hpp"
 #include "openMVG/matching_image_collection/Matcher_Regions.hpp"
 #include "openMVG/matching_image_collection/Pair_Builder.hpp"
@@ -27,6 +28,7 @@
 #include "third_party/stlplus3/filesystemSimplified/file_system.hpp"
 
 #include <cstdlib>
+#include <fstream>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -35,6 +37,149 @@ using namespace openMVG;
 using namespace openMVG::matching;
 using namespace openMVG::sfm;
 using namespace openMVG::matching_image_collection;
+
+namespace {
+
+constexpr std::size_t kPairChunkSize = 500000;
+
+class ForwardingMatchContainer : public PairWiseMatchesContainer
+{
+public:
+  ForwardingMatchContainer(
+    PairWiseMatchesContainer & sink,
+    std::ofstream * pair_stream,
+    const int min_match_count)
+    : sink_(sink),
+      pair_stream_(pair_stream),
+      min_match_count_(min_match_count)
+  {}
+
+  void insert(std::pair<Pair, IndMatches> && pairWiseMatches) override
+  {
+    if (min_match_count_ > 0 &&
+        static_cast<int>(pairWiseMatches.second.size()) < min_match_count_)
+    {
+      return;
+    }
+
+    if (pair_stream_)
+    {
+      (*pair_stream_) << pairWiseMatches.first.first << " " << pairWiseMatches.first.second << "\n";
+    }
+    ++pair_count_;
+    sink_.insert(std::move(pairWiseMatches));
+  }
+
+  std::size_t pair_count() const
+  {
+    return pair_count_;
+  }
+
+private:
+  PairWiseMatchesContainer & sink_;
+  std::ofstream * pair_stream_;
+  int min_match_count_ = 0;
+  std::size_t pair_count_ = 0;
+};
+
+template <typename FlushFn>
+bool ForEachPairChunkFromFile(
+  const size_t N,
+  const std::string & sFileName,
+  const FlushFn & flush_fn)
+{
+  std::ifstream in(sFileName);
+  if (!in)
+  {
+    OPENMVG_LOG_ERROR
+      << "loadPairs: Impossible to read the specified file: \"" << sFileName << "\".";
+    return false;
+  }
+
+  Pair_Set chunk_pairs;
+  std::string sValue;
+  std::vector<std::string> vec_str;
+  while (std::getline(in, sValue))
+  {
+    vec_str.clear();
+    stl::split(sValue, ' ', vec_str);
+    const IndexT str_size(vec_str.size());
+    if (str_size < 2)
+    {
+      OPENMVG_LOG_ERROR << "loadPairs: Invalid input file: \"" << sFileName << "\".";
+      return false;
+    }
+    std::stringstream oss;
+    oss.clear();
+    oss.str(vec_str[0]);
+    IndexT I = 0, J = 0;
+    oss >> I;
+    for (IndexT i = 1; i < str_size; ++i)
+    {
+      oss.clear();
+      oss.str(vec_str[i]);
+      oss >> J;
+      if (I > N - 1 || J > N - 1)
+      {
+        OPENMVG_LOG_ERROR
+          << "loadPairs: Invalid input file. Image out of range. "
+          << "I: " << I << " J:" << J << " N:" << N << "\n"
+          << "File: \"" << sFileName << "\".";
+        return false;
+      }
+      if (I == J)
+      {
+        OPENMVG_LOG_ERROR << "loadPairs: Invalid input file. Image " << I
+                          << " see itself. File: \"" << sFileName << "\".";
+        return false;
+      }
+      chunk_pairs.insert({std::min(I, J), std::max(I, J)});
+      if (chunk_pairs.size() >= kPairChunkSize)
+      {
+        if (!flush_fn(chunk_pairs))
+        {
+          return false;
+        }
+        chunk_pairs.clear();
+      }
+    }
+  }
+
+  if (!chunk_pairs.empty() && !flush_fn(chunk_pairs))
+  {
+    return false;
+  }
+  return true;
+}
+
+template <typename FlushFn>
+bool ForEachExhaustivePairChunk(const size_t N, const FlushFn & flush_fn)
+{
+  Pair_Set chunk_pairs;
+  for (IndexT I = 0; I < static_cast<IndexT>(N); ++I)
+  {
+    for (IndexT J = I + 1; J < static_cast<IndexT>(N); ++J)
+    {
+      chunk_pairs.insert({I, J});
+      if (chunk_pairs.size() >= kPairChunkSize)
+      {
+        if (!flush_fn(chunk_pairs))
+        {
+          return false;
+        }
+        chunk_pairs.clear();
+      }
+    }
+  }
+
+  if (!chunk_pairs.empty() && !flush_fn(chunk_pairs))
+  {
+    return false;
+  }
+  return true;
+}
+
+}  // namespace
 
 /// Compute corresponding features between a series of views:
 /// - Load view images description (regions: features & descriptors)
@@ -50,6 +195,7 @@ int main( int argc, char** argv )
   std::string  sNearestMatchingMethod = "AUTO";
   bool         bForce                 = false;
   unsigned int ui_max_cache_size      = 0;
+  double       shard_size_gb          = 10.0;
 
   // Pre-emptive matching parameters
   unsigned int ui_preemptive_feature_count = 200;
@@ -64,6 +210,7 @@ int main( int argc, char** argv )
   cmd.add( make_option( 'n', sNearestMatchingMethod, "nearest_matching_method" ) );
   cmd.add( make_option( 'f', bForce, "force" ) );
   cmd.add( make_option( 'c', ui_max_cache_size, "cache_size" ) );
+  cmd.add( make_option( 'S', shard_size_gb, "shard_size_gb" ) );
   // Pre-emptive matching
   cmd.add( make_option( 'P', ui_preemptive_feature_count, "preemptive_feature_count") );
 
@@ -103,6 +250,8 @@ int main( int argc, char** argv )
       << "[-c|--cache_size]\n"
       << "  Use a regions cache (only cache_size regions will be stored in memory)\n"
       << "  If not used, all regions will be load in memory."
+      << "\n[-S|--shard_size_gb]\n"
+      << "  Approximate maximum size for each sharded match file when --output_file uses .mshm\n"
       << "\n[Pre-emptive matching:]\n"
       << "[-P|--preemptive_feature_count] <NUMBER> Number of feature used for pre-emptive matching";
 
@@ -122,6 +271,7 @@ int main( int argc, char** argv )
             << "--ratio " << fDistRatio << "\n"
             << "--nearest_matching_method " << sNearestMatchingMethod << "\n"
             << "--cache_size " << ((ui_max_cache_size == 0) ? "unlimited" : std::to_string(ui_max_cache_size)) << "\n"
+            << "--shard_size_gb " << shard_size_gb << "\n"
             << "--preemptive_feature_used/count " << cmd.used('P') << " / " << ui_preemptive_feature_count;
   if (cmd.used('P'))
   {
@@ -207,6 +357,7 @@ int main( int argc, char** argv )
   system::LoggerProgress progress(1, {}, 1);
 
   PairWiseMatches map_PutativeMatches;
+  const bool use_sharded_output = IsShardedMatchFilename(sOutputMatchesFilename);
 
   // Build some alias from SfM_Data Views data:
   // - List views as a vector of filenames & image sizes
@@ -298,55 +449,97 @@ int main( int argc, char** argv )
     // Perform the matching
     system::Timer timer;
     {
-      // From matching mode compute the pair list that have to be matched:
-      Pair_Set pairs;
+      // Photometric matching of putative pairs
+      const std::string sOutputPairFilename =
+        stlplus::create_filespec( sMatchesDirectory, "preemptive_pairs", "txt" );
+      std::ofstream pair_stream(sOutputPairFilename.c_str());
+      if (!pair_stream)
+      {
+        OPENMVG_LOG_ERROR
+          << "Cannot save computed matches pairs in: "
+          << sOutputPairFilename;
+        return EXIT_FAILURE;
+      }
+
+      const int match_count_threshold = cmd.used('P')
+        ? static_cast<int>(preemptive_matching_percentage_threshold * ui_preemptive_feature_count)
+        : 0;
+
+      std::unique_ptr<ShardedPairWiseMatchesWriter> sharded_writer;
+      std::unique_ptr<ForwardingMatchContainer> forwarding_container;
+      if (use_sharded_output)
+      {
+        const auto max_shard_size_bytes =
+          static_cast<std::uint64_t>(std::max(1.0, shard_size_gb) * 1024.0 * 1024.0 * 1024.0);
+        sharded_writer.reset(new ShardedPairWiseMatchesWriter(
+          sOutputMatchesFilename,
+          ShardedMatchFileOptions{max_shard_size_bytes}));
+        if (!sharded_writer->IsOpen())
+        {
+          OPENMVG_LOG_ERROR << "Cannot initialize sharded matches output: " << sOutputMatchesFilename;
+          return EXIT_FAILURE;
+        }
+        forwarding_container.reset(new ForwardingMatchContainer(
+          *sharded_writer,
+          &pair_stream,
+          match_count_threshold));
+      }
+      else
+      {
+        forwarding_container.reset(new ForwardingMatchContainer(
+          map_PutativeMatches,
+          &pair_stream,
+          match_count_threshold));
+      }
+
+      if (cmd.used('P'))
+      {
+        OPENMVG_LOG_INFO << "Applying preemptive match filtering during matching with threshold: "
+                         << match_count_threshold;
+      }
+
+      const auto match_chunk =
+        [&](const Pair_Set & pair_chunk) -> bool
+        {
+          if (pair_chunk.empty())
+          {
+            return true;
+          }
+          OPENMVG_LOG_INFO << "Running matching on pair chunk of size: " << pair_chunk.size();
+          collectionMatcher->Match( regions_provider, pair_chunk, *forwarding_container, &progress );
+          return true;
+        };
+
       if ( sPredefinedPairList.empty() )
       {
         OPENMVG_LOG_INFO << "No input pair file set. Use exhaustive match by default.";
         const size_t NImage = sfm_data.GetViews().size();
-        pairs = exhaustivePairs( NImage );
+        if (!ForEachExhaustivePairChunk(NImage, match_chunk))
+        {
+          return EXIT_FAILURE;
+        }
       }
-      else
-      if ( !loadPairs( sfm_data.GetViews().size(), sPredefinedPairList, pairs ) )
+      else if (!ForEachPairChunkFromFile(sfm_data.GetViews().size(), sPredefinedPairList, match_chunk))
       {
         OPENMVG_LOG_ERROR << "Failed to load pairs from file: \"" << sPredefinedPairList << "\"";
         return EXIT_FAILURE;
-      }
-      OPENMVG_LOG_INFO << "Running matching on #pairs: " << pairs.size();
-      // Photometric matching of putative pairs
-      collectionMatcher->Match( regions_provider, pairs, map_PutativeMatches, &progress );
-
-      if (cmd.used('P')) // Preemptive filter
-      {
-        OPENMVG_LOG_INFO << "Applying preemptive match filtering...";
-        // Keep putative matches only if there is more than X matches
-        PairWiseMatches map_filtered_matches;
-        system::LoggerProgress filter_progress(
-          static_cast<std::uint32_t>(map_PutativeMatches.size()),
-          "- Preemptive match filtering -",
-          10);
-        for (const auto & pairwisematches_it : map_PutativeMatches)
-        {
-          const size_t putative_match_count = pairwisematches_it.second.size();
-          const int match_count_threshold =
-            preemptive_matching_percentage_threshold * ui_preemptive_feature_count;
-          // TODO: Add an option to keeping X Best pairs
-          if (putative_match_count >= match_count_threshold)  {
-            // the pair will be kept
-            map_filtered_matches.insert(pairwisematches_it);
-          }
-          ++filter_progress;
-        }
-        map_PutativeMatches.clear();
-        std::swap(map_filtered_matches, map_PutativeMatches);
-        OPENMVG_LOG_INFO << "Preemptive match filtering done.";
       }
 
       //---------------------------------------
       //-- Export putative matches & pairs
       //---------------------------------------
       OPENMVG_LOG_INFO << "Saving putative matches...";
-      if ( !Save( map_PutativeMatches, std::string( sOutputMatchesFilename ) ) )
+      if (use_sharded_output)
+      {
+        if (!sharded_writer->Finalize())
+        {
+          OPENMVG_LOG_ERROR
+            << "Cannot finalize sharded matches in: "
+            << sOutputMatchesFilename;
+          return EXIT_FAILURE;
+        }
+      }
+      else if ( !Save( map_PutativeMatches, std::string( sOutputMatchesFilename ) ) )
       {
         OPENMVG_LOG_ERROR
           << "Cannot save computed matches in: "
@@ -354,37 +547,33 @@ int main( int argc, char** argv )
         return EXIT_FAILURE;
       }
       OPENMVG_LOG_INFO << "Putative matches saved.";
-      // Save pairs
-      const std::string sOutputPairFilename =
-        stlplus::create_filespec( sMatchesDirectory, "preemptive_pairs", "txt" );
-      OPENMVG_LOG_INFO << "Saving pairs...";
-      if (!savePairs(
-        sOutputPairFilename,
-        getPairs(map_PutativeMatches)))
-      {
-        OPENMVG_LOG_ERROR
-          << "Cannot save computed matches pairs in: "
-          << sOutputPairFilename;
-        return EXIT_FAILURE;
-      }
       OPENMVG_LOG_INFO << "Pairs saved.";
     }
     OPENMVG_LOG_INFO << "Task (Regions Matching) done in (s): " << timer.elapsed();
   }
 
-  OPENMVG_LOG_INFO << "#Putative pairs: " << map_PutativeMatches.size();
+  OPENMVG_LOG_INFO << "#Putative pairs: "
+                   << (use_sharded_output ? "stored in sharded manifest" : std::to_string(map_PutativeMatches.size()));
 
-  // -- export Putative View Graph statistics
-  graph::getGraphStatistics(sfm_data.GetViews().size(), getPairs(map_PutativeMatches));
-
-  //-- export view pair graph once putative graph matches has been computed
+  if (!use_sharded_output)
   {
-    std::set<IndexT> set_ViewIds;
-    std::transform( sfm_data.GetViews().begin(), sfm_data.GetViews().end(), std::inserter( set_ViewIds, set_ViewIds.begin() ), stl::RetrieveKey() );
-    graph::indexedGraph putativeGraph( set_ViewIds, getPairs( map_PutativeMatches ) );
-    graph::exportToGraphvizData(
-        stlplus::create_filespec( sMatchesDirectory, "putative_matches" ),
-        putativeGraph );
+    // -- export Putative View Graph statistics
+    graph::getGraphStatistics(sfm_data.GetViews().size(), getPairs(map_PutativeMatches));
+
+    //-- export view pair graph once putative graph matches has been computed
+    {
+      std::set<IndexT> set_ViewIds;
+      std::transform( sfm_data.GetViews().begin(), sfm_data.GetViews().end(), std::inserter( set_ViewIds, set_ViewIds.begin() ), stl::RetrieveKey() );
+      graph::indexedGraph putativeGraph( set_ViewIds, getPairs( map_PutativeMatches ) );
+      graph::exportToGraphvizData(
+          stlplus::create_filespec( sMatchesDirectory, "putative_matches" ),
+          putativeGraph );
+    }
+  }
+  else
+  {
+    OPENMVG_LOG_WARNING
+      << "Skipping in-memory graph statistics and Graphviz export for sharded putative matches.";
   }
 
   return EXIT_SUCCESS;
