@@ -127,7 +127,7 @@ void ImageCollectionGeometricFilter::Robust_model_estimation
 #pragma omp critical
 #endif
         {
-          _map_GeometricMatches.insert( {current_pair, std::move(putative_inliers)});
+          _map_GeometricMatches.emplace(current_pair, std::move(putative_inliers));
         }
       }
     }
