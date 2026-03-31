@@ -42,7 +42,7 @@ bool Load
       filename,
       [&matches](const Pair & pair, IndMatches && pair_matches) -> bool
       {
-        matches.insert({pair, std::move(pair_matches)});
+        matches.emplace(pair, std::move(pair_matches));
         return true;
       });
   }
