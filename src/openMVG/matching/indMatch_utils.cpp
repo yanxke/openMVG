@@ -11,6 +11,7 @@
 
 #include "openMVG/matching/indMatch_utils.hpp"
 #include "openMVG/matching/indMatch_io.hpp"
+#include "openMVG/matching/sharded_pairwise_matches.hpp"
 #include "openMVG/system/logger.hpp"
 
 #include <algorithm>
@@ -35,6 +36,17 @@ bool Load
 )
 {
   matches.clear();
+  if (IsShardedMatchFilename(filename))
+  {
+    return ReadSharded(
+      filename,
+      [&matches](const Pair & pair, IndMatches && pair_matches) -> bool
+      {
+        matches.emplace(pair, std::move(pair_matches));
+        return true;
+      });
+  }
+
   std::ifstream stream;
   const std::string ext = stlplus::extension_part(filename);
   if (ext == "txt")
@@ -88,6 +100,11 @@ bool Save
   const std::string & filename
 )
 {
+  if (IsShardedMatchFilename(filename))
+  {
+    return SaveSharded(matches, filename);
+  }
+
   const std::string ext = stlplus::extension_part(filename);
   std::ofstream stream;
   if (ext == "txt")

@@ -74,6 +74,7 @@ void ImageCollectionGeometricFilter::Robust_model_estimation
 {
   if (!my_progress_bar)
     my_progress_bar = &system::ProgressInterface::dummy();
+  _map_GeometricMatches.clear();
   my_progress_bar->Restart( putative_matches.size(), "- Geometric filtering -" );
 
   // Cache iterators to avoid O(n^2) std::map traversal with advance().
@@ -126,7 +127,7 @@ void ImageCollectionGeometricFilter::Robust_model_estimation
 #pragma omp critical
 #endif
         {
-          _map_GeometricMatches.insert( {current_pair, std::move(putative_inliers)});
+          _map_GeometricMatches.emplace(current_pair, std::move(putative_inliers));
         }
       }
     }

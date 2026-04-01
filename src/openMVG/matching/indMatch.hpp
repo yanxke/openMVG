@@ -81,6 +81,8 @@ struct PairWiseMatches :
   public PairWiseMatchesContainer,
   public std::map<Pair, IndMatches>
 {
+  using std::map<Pair, IndMatches>::insert;
+
   void insert(std::pair<Pair, IndMatches> && pairWiseMatches)override
   {
     std::map<Pair, IndMatches>::insert(

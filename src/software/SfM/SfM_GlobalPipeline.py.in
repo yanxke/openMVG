@@ -100,7 +100,6 @@ def run_step(title, cmd, log_file):
   log_file.write("== " + title + " ==\n")
   log_file.write("Command: " + " ".join(cmd) + "\n")
   log_file.flush()
-
   start_time = time.time()
   process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
   for line in iter(process.stdout.readline, b""):
@@ -121,6 +120,10 @@ def run_step(title, cmd, log_file):
   log_file.write(summary)
   log_file.flush()
   return elapsed
+
+def match_json_sidecar(path):
+  root, _ = os.path.splitext(path)
+  return root + ".json"
 
 def write_non_contiguous_pairs(sfm_data_json_path, contiguous_count, output_path):
   """Write a pairs text file (I J per line) for all pairs whose sequential gap > contiguous_count.
@@ -174,8 +177,10 @@ with open(log_path, "a") as log_file:
     print ("3. Compute matching pairs (skipped, pairs.bin exists)")
     log_file.write("== 3. Compute matching pairs (skipped, pairs.bin exists) ==\n")
 
+  putative_matches = os.path.join(matches_dir, "matches.putative.mshm")
+
   run_step("4. Compute matches",
-           [os.path.join(OPENMVG_SFM_BIN, "openMVG_main_ComputeMatches"), "-i", matches_dir+"/sfm_data.json", "-p", matches_dir+ "/pairs.bin", "-o", matches_dir + "/matches.putative.bin", "-r", str(args.ratio)],
+           [os.path.join(OPENMVG_SFM_BIN, "openMVG_main_ComputeMatches"), "-i", matches_dir+"/sfm_data.json", "-p", matches_dir+ "/pairs.bin", "-o", putative_matches, "-r", str(args.ratio)],
            log_file)
 
   if not args.disable_dual_geometric_filter:
@@ -209,7 +214,7 @@ with open(log_path, "a") as log_file:
         print("5b.1. Generate upright pairs (skipped, pairs.upright.bin exists)")
       cmd = [os.path.join(OPENMVG_SFM_BIN, "openMVG_main_GeometricFilter"),
              "-i", matches_dir+"/sfm_data.json",
-             "-m", matches_dir+"/matches.putative.bin",
+             "-m", putative_matches,
              "-p", upright_pairs,
              "-g", "u",
              "-o", tmp_upright,
@@ -225,7 +230,7 @@ with open(log_path, "a") as log_file:
     if not os.path.exists(tmp_contiguous_e):
       cmd = [os.path.join(OPENMVG_SFM_BIN, "openMVG_main_GeometricFilter"),
              "-i", matches_dir+"/sfm_data.json",
-             "-m", matches_dir+"/matches.putative.bin",
+             "-m", putative_matches,
              "-p", contiguous_pairs,
              "-g", "e",
              "-o", tmp_contiguous_e,
@@ -254,7 +259,7 @@ with open(log_path, "a") as log_file:
       if args.use_plain_geometric_filter:
         cmd = [os.path.join(OPENMVG_SFM_BIN, "openMVG_main_GeometricFilter"),
                "-i", matches_dir+"/sfm_data.json",
-               "-m", matches_dir+"/matches.putative.bin",
+               "-m", putative_matches,
                "-p", non_contiguous_pairs,
                "-g", "e",
                "-o", tmp_standard,
@@ -267,7 +272,7 @@ with open(log_path, "a") as log_file:
         if not os.path.exists(tmp_imu_prelim):
           cmd = [os.path.join(OPENMVG_SFM_BIN, "openMVG_main_GeometricFilterWithPriors"),
                  "-i", matches_dir+"/sfm_data.json",
-                 "-m", matches_dir+"/matches.putative.bin",
+                 "-m", putative_matches,
                  "-p", non_contiguous_pairs,
                  "-g", imu_model,
                  "-o", tmp_imu_prelim,
@@ -280,7 +285,7 @@ with open(log_path, "a") as log_file:
         # 5d.2b: Essential filter — full putative matches, but only for IMU-selected pairs
         # Extract pair indices from the IMU prelim JSON into a plain-text pairs file
         imu_prelim_pairs = os.path.join(matches_dir, "pairs.imu_prelim.bin")
-        with open(tmp_imu_prelim.replace(".bin", ".json")) as _f:
+        with open(match_json_sidecar(tmp_imu_prelim)) as _f:
           _prelim = json.load(_f)
         with open(imu_prelim_pairs, "w") as _f:
           for p in _prelim["pairs"]:
@@ -290,7 +295,7 @@ with open(log_path, "a") as log_file:
         print(msg.strip()); log_file.write("== " + msg); log_file.flush()
         cmd = [os.path.join(OPENMVG_SFM_BIN, "openMVG_main_GeometricFilter"),
                "-i", matches_dir+"/sfm_data.json",
-               "-m", matches_dir+"/matches.putative.bin",
+               "-m", putative_matches,
                "-p", imu_prelim_pairs,
                "-g", "e",
                "-o", tmp_standard,
@@ -317,10 +322,10 @@ with open(log_path, "a") as log_file:
     actual_matches = os.path.join(matches_dir, "matches.e.bin")
     if not os.path.exists(actual_matches):
       if args.use_plain_geometric_filter:
-        run_step("5. Filter matches with geometric filter (-g e, no priors)", [os.path.join(OPENMVG_SFM_BIN, "openMVG_main_GeometricFilter"), "-i", matches_dir+"/sfm_data.json", "-m", matches_dir+"/matches.putative.bin", "-g", "e", "-o", actual_matches, "-I", str(args.ransac_iter)], log_file)
+        run_step("5. Filter matches with geometric filter (-g e, no priors)", [os.path.join(OPENMVG_SFM_BIN, "openMVG_main_GeometricFilter"), "-i", matches_dir+"/sfm_data.json", "-m", putative_matches, "-g", "e", "-o", actual_matches, "-I", str(args.ransac_iter)], log_file)
       else:
         imu_model = "p" if args.imu_pitch_roll_only else "i"
-        geofilt_cmd = [os.path.join(OPENMVG_SFM_BIN, "openMVG_main_GeometricFilterWithPriors"), "-i", matches_dir+"/sfm_data.json", "-m", matches_dir+"/matches.putative.bin", "-g", imu_model, "-o", actual_matches, "-I", str(args.ransac_iter), "-t", "50.0", "-M", str(args.min_inliers), "-T", str(args.geofilt_prec)]
+        geofilt_cmd = [os.path.join(OPENMVG_SFM_BIN, "openMVG_main_GeometricFilterWithPriors"), "-i", matches_dir+"/sfm_data.json", "-m", putative_matches, "-g", imu_model, "-o", actual_matches, "-I", str(args.ransac_iter), "-t", "50.0", "-M", str(args.min_inliers), "-T", str(args.geofilt_prec)]
         if not args.disable_reestimate_rotation: geofilt_cmd.append("-U")
         if args.imu_reestimate_prec is not None: geofilt_cmd.extend(["-Q", str(args.imu_reestimate_prec)])
         run_step("5. Filter matches with IMU-guided solver", geofilt_cmd, log_file)
